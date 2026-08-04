@@ -1043,6 +1043,12 @@ table.data th.num {
   align-items: center;
   justify-content: center;
   padding: 16px;
+  /* The zoom surface owns every gesture: no WebView pinch/scroll/overscroll. */
+  touch-action: none;
+  overscroll-behavior: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
 }
 
 .lightbox img {
@@ -1050,6 +1056,17 @@ table.data th.num {
   max-height: 88vh;
   max-height: 88dvh;
   object-fit: contain;
+  transform-origin: 0 0;
+  will-change: transform;
+  -webkit-user-drag: none;
+}
+
+.lightbox.zoomed {
+  cursor: grab;
+}
+
+.lightbox.zoomed:active {
+  cursor: grabbing;
 }
 
 .lightbox .close {

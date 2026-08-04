@@ -3,6 +3,9 @@
  * peers can see who an inventory last synchronized with.
  */
 import type { DevicePresence } from '../types';
+// Direct module import (not the services barrel), cycle-free: profile only
+// imports types and store/ids.
+import { getOwnerId } from '../services/profile';
 
 const ID_KEY = 'deviceId:v1';
 
@@ -47,5 +50,8 @@ export function getDevicePresence(): DevicePresence {
     id: getDeviceId(),
     label: name ? `${name} · ${platformLabel()}` : platformLabel(),
     at: Date.now(),
+    // Only meaningful once the user has a name; avoids minting an owner id
+    // for anonymous devices.
+    ...(name ? { ownerId: getOwnerId() } : {}),
   };
 }

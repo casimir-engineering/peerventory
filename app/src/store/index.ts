@@ -10,6 +10,7 @@ export {
 export { usePhotoUrl, getPhotoBlob } from './photos';
 export { newId, newToken } from './ids';
 export { getDeviceId } from './device';
+export { ownerDisplayName } from './owners';
 export { getHandlesSnapshot, getStoredHandle, importHandles } from './registry';
 export type {
   ItemDraft,

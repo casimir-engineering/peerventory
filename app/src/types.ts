@@ -79,7 +79,28 @@ export interface LocationEntry {
 export interface OwnerEntry {
   /** epoch ms */
   time: number;
+  /**
+   * Stable owner identity (key into the doc's owners directory). Entries
+   * written before owner ids existed only carry the display-name string.
+   */
+  ownerId?: Id;
+  /**
+   * Display name at the time of writing; the fallback when ownerId is absent
+   * or not (yet) present in the owners directory.
+   */
   owner: string;
+}
+
+/**
+ * Entry in the per-doc owners directory (Y.Map 'owners': ownerId -> entry).
+ * The directory maps stable owner ids to their CURRENT display name, so a
+ * rename propagates to every synced copy; ownerHistory display resolves
+ * ownerId -> directory name -> stored fallback string.
+ */
+export interface OwnerDirectoryEntry {
+  name: string;
+  /** epoch ms of the last name change */
+  updatedAt: number;
 }
 
 export type PhotoRole = 'photo' | 'serial_label' | 'receipt';
@@ -163,6 +184,12 @@ export interface InventoryMeta {
    * locations. Absent/true = coordinates are stored.
    */
   preciseLocation?: boolean;
+  /**
+   * Optional-field sections ever filled in this inventory (union, never
+   * pruned). The new-item form pre-expands exactly these; synced so every
+   * device sees the same defaults.
+   */
+  fieldPrefs?: { expanded: string[] };
 }
 
 /**
@@ -196,6 +223,8 @@ export interface DevicePresence {
   label: string;
   /** Epoch ms the device last recorded itself (throttled). */
   at: number;
+  /** Stable owner identity of the user of this device, when a name is set. */
+  ownerId?: string;
 }
 
 /** Plain-object snapshot of a whole inventory, used by exports. */
@@ -205,4 +234,6 @@ export interface InventorySnapshot {
   boxes: Box[];
   savedLists: SavedList[];
   devices?: DevicePresence[];
+  /** Owners directory: stable ownerId -> current display name. */
+  owners?: Record<Id, OwnerDirectoryEntry>;
 }

@@ -1,0 +1,46 @@
+<!doctype html>
+<!--
+  Local stand-in for the Anibis publish form (https://www.anibis.ch/fr/publier).
+  Plain (non-React) controls with French labels and name attributes, matching
+  the strategies content/anibis.js relies on: <label for>, name=, placeholder.
+  This mirrors typical structure, NOT the live page — a logged-in manual test
+  against the real form is still required.
+-->
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Publier une annonce — fixture</title>
+    <style>
+      body { font-family: sans-serif; max-width: 560px; margin: 40px auto; }
+      label { display: block; margin: 14px 0 4px; font-weight: 600; }
+      input, textarea, select { width: 100%; padding: 6px; box-sizing: border-box; }
+    </style>
+  </head>
+  <body>
+    <h1>Publier une annonce</h1>
+    <form>
+      <label for="ad-title">Titre de l'annonce</label>
+      <input id="ad-title" name="title" type="text" maxlength="60" />
+
+      <label for="ad-desc">Description</label>
+      <textarea id="ad-desc" name="description" rows="6" placeholder="Décrivez votre objet"></textarea>
+
+      <label for="ad-price">Prix (CHF)</label>
+      <input id="ad-price" name="price" type="text" inputmode="numeric" />
+
+      <label for="ad-condition">État</label>
+      <select id="ad-condition" name="condition">
+        <option value="">—</option>
+        <option value="new">Neuf</option>
+        <option value="like-new">Comme neuf</option>
+        <option value="good">Bon état</option>
+        <option value="used">Utilisé</option>
+      </select>
+
+      <label>Catégorie</label>
+      <button type="button">Choisir une catégorie…</button>
+
+      <p>Photos: <em>glissez vos photos ici</em></p>
+    </form>
+  </body>
+</html>

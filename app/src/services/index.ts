@@ -12,6 +12,8 @@ export type { PlaceHit } from './geocode';
 export {
   getUserName,
   setUserName,
+  getOwnerId,
+  effectiveOwnerId,
   ownerAliasFor,
   setOwnerAlias,
   effectiveOwnerName,

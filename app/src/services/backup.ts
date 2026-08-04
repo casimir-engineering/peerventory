@@ -4,9 +4,11 @@
  * or a QR code. Treat any backup like a password: whoever has it has full
  * access to everything on this device.
  *
- * Payload v2 = base64url(JSON): { v:2, n?:name, a?:aliases, c?:lastCurrency,
- * k?:aiKey, h:[{ d, rw?, ro?, ek?, nm? }] } where `ek` is the per-inventory
- * content encryption key of end-to-end encrypted docs. v1 payloads (no keys)
+ * Payload v2 = base64url(JSON): { v:2, n?:name, oi?:ownerId, a?:aliases,
+ * c?:lastCurrency, k?:aiKey, h:[{ d, rw?, ro?, ek?, nm? }] } where `ek` is
+ * the per-inventory content encryption key of end-to-end encrypted docs and
+ * `oi` is the stable owner id of this user (so a restored device keeps the
+ * same owner identity). v1 payloads (no keys) and v2 payloads without `oi`
  * are still accepted.
  */
 
@@ -15,10 +17,13 @@ import { getAiKey, setAiKey } from './aikey';
 import {
   getLastCurrency,
   getOwnerAliases,
+  getOwnerId,
+  getStoredOwnerId,
   getUserName,
   ownerAliasFor,
   setLastCurrency,
   setOwnerAlias,
+  setOwnerId,
   setUserName,
 } from './profile';
 
@@ -33,6 +38,8 @@ export interface BackupHandle {
 
 export interface DecodedBackup {
   name?: string;
+  /** Stable owner id of the user this backup came from. */
+  ownerId?: string;
   aliases?: Record<string, string>;
   lastCurrency?: string;
   aiKey?: string;
@@ -42,6 +49,7 @@ export interface DecodedBackup {
 interface WirePayload {
   v: 1 | 2;
   n?: string;
+  oi?: string;
   a?: Record<string, string>;
   c?: string;
   k?: string;
@@ -80,6 +88,7 @@ export function encodeBackup(): string {
   };
   const name = getUserName();
   if (name) wire.n = name;
+  wire.oi = getOwnerId();
   const aliases = getOwnerAliases();
   if (Object.keys(aliases).length > 0) wire.a = aliases;
   const currency = getLastCurrency();
@@ -105,6 +114,7 @@ export function decodeBackup(payload: string): DecodedBackup | null {
     if ((wire.v !== 1 && wire.v !== 2) || !Array.isArray(wire.h)) return null;
     return {
       name: typeof wire.n === 'string' ? wire.n : undefined,
+      ownerId: typeof wire.oi === 'string' && wire.oi ? wire.oi : undefined,
       aliases: wire.a && typeof wire.a === 'object' ? wire.a : undefined,
       lastCurrency: typeof wire.c === 'string' ? wire.c : undefined,
       aiKey: typeof wire.k === 'string' ? wire.k : undefined,
@@ -137,6 +147,22 @@ export interface ImportBackupResult {
  * handle merging never downgrades access (see importHandles).
  */
 export function importBackup(backup: DecodedBackup): ImportBackupResult {
+  // Identity first: docs (re)opened during the handle import below record
+  // the user in the owners directory, which needs ownerId/name in place.
+  if (backup.ownerId && !getStoredOwnerId()) setOwnerId(backup.ownerId);
+  let nameApplied = false;
+  if (backup.name && !getUserName()) {
+    setUserName(backup.name);
+    nameApplied = true;
+  }
+  if (backup.aliases) {
+    for (const [docId, owner] of Object.entries(backup.aliases)) {
+      if (typeof owner === 'string' && owner && !ownerAliasFor(docId)) {
+        setOwnerAlias(docId, owner);
+      }
+    }
+  }
+
   // Docs already known here WITHOUT a key that gain one from this backup must
   // be wiped and re-synced: whatever they stored locally is ciphertext.
   const gainedKey = backup.handles
@@ -152,18 +178,6 @@ export function importBackup(backup: DecodedBackup): ImportBackupResult {
     void reopenEncryptedDoc(docId);
   }
 
-  let nameApplied = false;
-  if (backup.name && !getUserName()) {
-    setUserName(backup.name);
-    nameApplied = true;
-  }
-  if (backup.aliases) {
-    for (const [docId, owner] of Object.entries(backup.aliases)) {
-      if (typeof owner === 'string' && owner && !ownerAliasFor(docId)) {
-        setOwnerAlias(docId, owner);
-      }
-    }
-  }
   if (backup.lastCurrency && !getLastCurrency()) setLastCurrency(backup.lastCurrency);
 
   let aiKeyApplied = false;

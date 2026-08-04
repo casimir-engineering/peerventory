@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "source": "peerventory",
+  "item": {
+    "title": "Sony WH-1000XM4 — casque à réduction de bruit",
+    "description": "Sony WH-1000XM4 wireless noise-cancelling headphones in very good condition. Comes with the original case and cable. Battery still holds a full day.",
+    "descriptionTranslations": {
+      "fr": "Casque sans fil Sony WH-1000XM4 à réduction de bruit, en très bon état. Livré avec l'étui et le câble d'origine. Batterie tient une journée complète.",
+      "de": "Sony WH-1000XM4 kabelloser Noise-Cancelling-Kopfhörer in sehr gutem Zustand. Mit Original-Etui und Kabel. Akku hält einen ganzen Tag."
+    },
+    "priceAmount": 120,
+    "priceCurrency": "CHF",
+    "condition": "Bon état",
+    "category": "Audio & Hi-Fi",
+    "brandModel": "Sony WH-1000XM4",
+    "weightGrams": 254,
+    "dimensionsMm": { "l": 254, "w": 203, "h": 76 },
+    "serialIncluded": true
+  },
+  "photosNote": "3 photo(s) downloaded separately — drag them into the listing form."
+}

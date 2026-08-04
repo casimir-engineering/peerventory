@@ -86,6 +86,16 @@ transits the relay.
 **Offline OCR.** Serial numbers can be captured with the camera; Tesseract
 runs fully on-device (no CDN, works behind restrictive firewalls).
 
+## Selling connector
+
+Every item sheet has a **Sell / export listing** button that drafts
+marketplace copy (AI-written when a Claude key is on the device, field
+template otherwise) and exports it as a JSON payload plus the item's photos.
+A companion Chrome extension in `connector/` autofills the listing forms of
+Anibis and Facebook Marketplace from that payload — manual-assist only, the
+user always reviews and publishes. See `connector/README.md` for the payload
+contract and workflow.
+
 ## Architecture
 
 ```
@@ -110,6 +120,8 @@ runs fully on-device (no CDN, works behind restrictive firewalls).
   persistence, Hocuspocus sync client); Capacitor Android packaging
 - `server/` — single Node service: Hocuspocus sync (`/sync`) +
   content-addressed photo blob API (`/api/blobs`)
+- `connector/` — Chrome extension (MV3) that autofills marketplace listing
+  forms from the app's Sell payload, plus its tests
 - `deploy/` — Docker Compose deployments: standalone with Caddy TLS
   (`deploy/`), or behind an existing reverse proxy (`deploy/npm-proxy/`)
 - `CONTRACTS.md` — binding protocol contracts between app and server

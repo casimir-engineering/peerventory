@@ -9,7 +9,7 @@ import {
   suggestInputs,
 } from '../../services';
 import type { AiSuggestions } from '../../services';
-import { getPhotoBlob, useInventory } from '../../store';
+import { getPhotoBlob, ownerDisplayName, useInventory } from '../../store';
 import type { ItemPatch, UseInventoryResult } from '../../store/contract';
 import type {
   AcquisitionMethod,
@@ -42,6 +42,7 @@ import { ConfirmModal, Modal } from '../components/Modal';
 import { SmartCombo } from '../components/SmartCombo';
 import { OcrScanner } from '../components/OcrScanner';
 import { PhotoGallery } from '../components/Photos';
+import { SellModal } from '../components/SellModal';
 import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
 import { countryComboOptions } from '../lib/countries';
@@ -74,6 +75,7 @@ export function ItemSheetPage() {
   const inv: UseInventoryResult = useInventory(docId || null);
 
   const [sharing, setSharing] = useState(false);
+  const [selling, setSelling] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
@@ -88,11 +90,16 @@ export function ItemSheetPage() {
   const ownerOptions = useMemo(() => {
     const set = new Set<string>();
     for (const candidate of allItems) {
-      const last = candidate.ownerHistory?.[candidate.ownerHistory.length - 1]?.owner;
-      if (last) set.add(last);
+      const last = candidate.ownerHistory?.[candidate.ownerHistory.length - 1];
+      const name = last ? ownerDisplayName(inv.owners, last) : '';
+      if (name) set.add(name);
+    }
+    // The owners directory knows people even when they own nothing right now.
+    for (const dir of Object.values(inv.owners)) {
+      if (dir.name.trim()) set.add(dir.name);
     }
     return mergeSuggestions('owner', [...set].sort((a, b) => a.localeCompare(b)));
-  }, [allItems]);
+  }, [allItems, inv.owners]);
 
   const categoryOptions = useMemo(() => {
     const set = new Set<string>();
@@ -330,7 +337,11 @@ export function ItemSheetPage() {
   const locations: LocationEntry[] = sheet.locationHistory ?? [];
   const currentLocationEntry = locations.length > 0 ? locations[locations.length - 1] : undefined;
   const owners = sheet.ownerHistory ?? [];
-  const currentOwnerName = owners.length > 0 ? owners[owners.length - 1]?.owner : undefined;
+  const lastOwnerEntry = owners.length > 0 ? owners[owners.length - 1] : undefined;
+  // ownerId -> owners-directory current name -> stored fallback string.
+  const currentOwnerName = lastOwnerEntry
+    ? ownerDisplayName(inv.owners, lastOwnerEntry) || undefined
+    : undefined;
   const ownerTracking = Boolean(inv.meta?.ownerTrackingEnabled);
   const ownerDisabled = Boolean(sheet.ownerDisabled);
   const hasPhotos = (sheet.photos ?? []).length > 0;
@@ -636,7 +647,7 @@ export function ItemSheetPage() {
                       {[...owners].reverse().map((entry, index) => (
                         <li key={`${entry.time}-${index}`}>
                           <span className="when">{formatDateTime(entry.time)}</span>
-                          <span className="grow">{entry.owner}</span>
+                          <span className="grow">{ownerDisplayName(inv.owners, entry)}</span>
                         </li>
                       ))}
                     </ul>
@@ -792,6 +803,10 @@ export function ItemSheetPage() {
             Added {formatDateTime(sheet.createdAt)} · Updated {formatDateTime(sheet.updatedAt)}
           </p>
 
+          <button type="button" className="btn" onClick={() => setSelling(true)}>
+            Sell / export listing
+          </button>
+
           {!readonly ? (
             <button type="button" className="btn danger" onClick={() => setConfirmDelete(true)}>
               Delete item
@@ -820,6 +835,15 @@ export function ItemSheetPage() {
             }}
           />
         </Modal>
+      ) : null}
+
+      {selling ? (
+        <SellModal
+          docId={docId}
+          item={sheet}
+          mainCurrency={mainCurrency}
+          onClose={() => setSelling(false)}
+        />
       ) : null}
 
       {sharing ? (

@@ -28,7 +28,8 @@
 
 import type {
   Id, Item, Box, SavedList, InventoryMeta, InventoryHandle, InventorySnapshot,
-  PhotoRole, LocationEntry, Weight, Dimensions, MoneyValue, AcquisitionMethod, PhotoRef,
+  PhotoRole, LocationEntry, OwnerDirectoryEntry, Weight, Dimensions, MoneyValue,
+  AcquisitionMethod, PhotoRef,
 } from '../types';
 
 /** Fields required to create an item. Weight and dimensions are MANDATORY. */
@@ -81,6 +82,12 @@ export interface UseInventoryResult {
   items: Item[];                 // reactive, sorted by createdAt desc
   boxes: Box[];
   savedLists: SavedList[];
+  /**
+   * Owners directory of the doc (Y.Map 'owners'): stable ownerId -> current
+   * display name. Resolve owner display via ownerDisplayName() from the
+   * store: ownerId -> directory name -> the entry's stored fallback string.
+   */
+  owners: Record<Id, OwnerDirectoryEntry>;
   syncStatus: SyncStatus;
 
   updateMeta(patch: Partial<Omit<InventoryMeta, 'id' | 'createdAt'>>): void;
@@ -96,7 +103,11 @@ export interface UseInventoryResult {
    * Used when precise locations get turned off. Returns entries scrubbed.
    */
   stripLocationCoords(): number;
-  /** Append to owner history. */
+  /**
+   * Append to owner history. The store resolves the display name to a stable
+   * ownerId (own profile id, an existing directory entry with that name, or
+   * a freshly minted id) and records both on the entry.
+   */
   setOwner(itemId: Id, owner: string): void;
 
   addPhoto(itemId: Id, blob: Blob, role?: PhotoRole): Promise<PhotoRef>;

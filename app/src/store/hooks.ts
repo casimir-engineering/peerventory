@@ -13,6 +13,7 @@ import type {
   InventorySnapshot,
   Item,
   LocationEntry,
+  OwnerDirectoryEntry,
   PhotoRef,
   PhotoRole,
   SavedList,
@@ -38,6 +39,7 @@ import {
 } from './docs';
 import { generateContentKey, isValidContentKey } from './crypto';
 import { newId, newToken } from './ids';
+import { readOwners, resolveOwnerIdForName, upsertOwner } from './owners';
 import { addPhoto as storeAddPhoto, clearUploadQueue, kickUploadLoop } from './photos';
 import {
   getHandlesSnapshot,
@@ -102,7 +104,21 @@ async function joinInventory(docId: Id, token: string, key?: string): Promise<In
     const adopt =
       isNewToken && !(existing.rwConfirmed && existing.rwToken && !existing.readonly);
     if (adopt) {
-      upsertHandle({ ...existing, rwToken: token, readonly: false, rwConfirmed: undefined });
+      // Keep a previous, not-yet-confirmed candidate in the ro slot instead
+      // of dropping it: a doc has exactly one rw and one ro token, so with
+      // two distinct candidates one of them is the rw token. If the new
+      // primary turns out read-only, docs.ts swaps in the stashed candidate
+      // and re-authenticates (offline rw-join followed by a ro link must not
+      // lose write access).
+      const stash =
+        existing.rwToken && !existing.rwConfirmed ? existing.rwToken : undefined;
+      upsertHandle({
+        ...existing,
+        rwToken: token,
+        roToken: existing.roToken ?? stash,
+        readonly: false,
+        rwConfirmed: undefined,
+      });
     }
     if (contentKey && !existing.key) {
       // The link carried the content key this device was missing. Anything
@@ -155,7 +171,8 @@ const EMPTY_DATA: {
   items: Item[];
   boxes: Box[];
   savedLists: SavedList[];
-} = { meta: null, items: [], boxes: [], savedLists: [] };
+  owners: Record<Id, OwnerDirectoryEntry>;
+} = { meta: null, items: [], boxes: [], savedLists: [], owners: {} };
 
 function guardWrite(entry: DocEntry | null, docId: Id | null): DocEntry | null {
   if (!entry || !docId) {
@@ -232,6 +249,7 @@ export function useInventory(docId: Id | null): UseInventoryResult {
       items: readItems(entry.doc),
       boxes: readBoxes(entry.doc),
       savedLists: readLists(entry.doc),
+      owners: readOwners(entry.doc),
     };
   }, [entry, version]);
 
@@ -251,6 +269,7 @@ export function useInventory(docId: Id | null): UseInventoryResult {
     items: data.items,
     boxes: data.boxes,
     savedLists: data.savedLists,
+    owners: data.owners,
     syncStatus: entry?.status ?? 'offline',
 
     updateMeta(patch) {
@@ -288,7 +307,7 @@ export function useInventory(docId: Id | null): UseInventoryResult {
         valueNew: draft.valueNew,
         photos: [],
         locationHistory: initialLocation ? [initialLocation] : [],
-        ownerHistory: draft.initialOwner ? [{ time: now, owner: draft.initialOwner }] : [],
+        ownerHistory: [], // filled inside the transaction (needs owner-id resolution)
         ownerDisabled: draft.ownerDisabled,
         weight: draft.weight,
         dimensions: draft.dimensions,
@@ -305,6 +324,16 @@ export function useInventory(docId: Id | null): UseInventoryResult {
         translations: draft.translations,
       };
       e.doc.transact(() => {
+        const initialOwner = draft.initialOwner?.trim();
+        if (initialOwner) {
+          item.ownerHistory = [
+            {
+              time: now,
+              ownerId: resolveOwnerIdForName(e.doc, docId!, initialOwner),
+              owner: initialOwner,
+            },
+          ];
+        }
         e.doc
           .getMap<Y.Map<unknown>>('items')
           .set(id, new Y.Map(Object.entries(compact(item))));
@@ -370,10 +399,16 @@ export function useInventory(docId: Id | null): UseInventoryResult {
     setOwner(itemId: Id, owner: string) {
       const e = guardWrite(entry, docId);
       if (!e) return;
+      const name = owner.trim();
+      if (!name) return;
       e.doc.transact(() => {
         const item = getItemMap(e, itemId);
         if (!item) return;
-        appendToArray(item, 'ownerHistory', { time: Date.now(), owner });
+        appendToArray(item, 'ownerHistory', {
+          time: Date.now(),
+          ownerId: resolveOwnerIdForName(e.doc, docId!, name),
+          owner: name,
+        });
         item.set('updatedAt', Date.now());
       });
     },
@@ -478,6 +513,7 @@ export async function snapshotInventory(docId: Id): Promise<InventorySnapshot> {
     boxes: readBoxes(entry.doc),
     savedLists: readLists(entry.doc),
     devices: readDevices(entry.doc),
+    owners: readOwners(entry.doc),
   });
 }
 
@@ -506,6 +542,10 @@ export async function importSnapshot(
   entry.doc.transact(() => {
     if (snap.meta.description) {
       entry.doc.getMap<unknown>('meta').set('description', snap.meta.description);
+    }
+    // Preserve the owners directory so ownerHistory ownerIds keep resolving.
+    for (const [ownerId, dir] of Object.entries(snap.owners ?? {})) {
+      upsertOwner(entry.doc, ownerId, dir.name);
     }
     const boxes = entry.doc.getMap<Box>('boxes');
     for (const box of snap.boxes) boxes.set(box.id, box);

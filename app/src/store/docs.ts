@@ -13,7 +13,11 @@ import type { SyncStatus } from './contract';
 import { getDevicePresence } from './device';
 import { clearOuterDoc, E2eSync, E2EE_REMOTE_ORIGIN, ENC_LOG_NAME } from './e2ee';
 import { sha256Hex } from './ids';
+import { ensureSelfOwner } from './owners';
 import { getStoredHandle, updateHandle } from './registry';
+// Direct module import (not the services barrel), cycle-free: profile only
+// imports types and store/ids.
+import { subscribeOwnerName } from '../services/profile';
 
 export interface DocEntry {
   docId: Id;
@@ -32,9 +36,21 @@ export interface DocEntry {
   /** true once y-indexeddb has loaded the locally persisted state */
   loaded: boolean;
   version: number;
+  /** Debounce for the owner-directory upsert after update bursts. */
+  ownerTimer?: ReturnType<typeof setTimeout>;
 }
 
 const entries = new Map<Id, DocEntry>();
+
+// A rename (global name, per-doc alias, or owner-id link) is pushed into the
+// owners directory of every affected open doc right away; docs opened later
+// pick it up via recordOwner on load/sync.
+subscribeOwnerName((docId) => {
+  for (const entry of entries.values()) {
+    if (docId && entry.docId !== docId) continue;
+    recordOwner(entry);
+  }
+});
 
 // Keyed by docId (not stored on the entry) so subscriptions survive an entry
 // being closed and recreated (forget + re-join in the same session), and so
@@ -60,6 +76,10 @@ function setStatus(entry: DocEntry, status: SyncStatus): void {
   entry.status = status;
   bump(entry);
 }
+
+/** Docs that already used their one automatic candidate-swap after an auth
+ *  rejection this session (see onAuthenticationFailed). */
+const authFallbackTried = new Set<Id>();
 
 const SYNC_STAMP_THROTTLE_MS = 30_000;
 const PRESENCE_THROTTLE_MS = 5 * 60_000;
@@ -95,8 +115,33 @@ function recordPresence(entry: DocEntry): void {
     return;
   }
   entry.doc.transact(() => {
-    map.set(presence.id, { id: presence.id, label: presence.label, at: presence.at });
+    map.set(presence.id, {
+      id: presence.id,
+      label: presence.label,
+      at: presence.at,
+      ...(presence.ownerId ? { ownerId: presence.ownerId } : {}),
+    });
   });
+}
+
+/**
+ * Keep this user's entry in the doc's owners directory current (see
+ * owners.ts). Same gates as recordPresence: write access and the E2E bridge
+ * (without a content key we must not write plaintext into the doc). Also
+ * gated on meta being present: registering into a doc whose content has not
+ * arrived yet would mint a duplicate owner instead of matching an existing
+ * same-name entry.
+ */
+function recordOwner(entry: DocEntry): void {
+  if (!entry.e2ee) return;
+  if (!entry.doc.getMap<unknown>('meta').has('id')) return;
+  const h = getStoredHandle(entry.docId);
+  if (!h || h.readonly || !h.rwToken) return;
+  try {
+    ensureSelfOwner(entry.doc, entry.docId);
+  } catch (err) {
+    console.warn(`[store] owner directory update failed for ${entry.docId}`, err);
+  }
 }
 
 /** Auth token per CONTRACTS.md: JSON string, with `create` payload while the
@@ -145,31 +190,56 @@ function attachSyncProvider(entry: DocEntry): void {
           stampSynced(docId);
           entry.e2ee?.onServerSynced();
           recordPresence(entry);
+          recordOwner(entry);
         }
       },
       onAuthenticated: ({ scope }) => {
+        authFallbackTried.delete(docId);
         const h = getStoredHandle(docId);
         if (!h) return;
         if (scope === 'read-write') {
           // Server accepted the create handshake (if any) and confirmed rw.
           // Only persist when something changes: this fires on every reconnect.
-          if (h.readonly || h.pendingCreate || !h.rwConfirmed) {
+          if (h.readonly || h.pendingCreate || !h.rwConfirmed || !h.rwToken) {
             updateHandle(docId, {
+              // The token we authenticated with is by definition the rw
+              // token; normally it already sits in rwToken, but a fallback
+              // (see onAuthenticationFailed) may have left it in roToken.
+              ...(h.rwToken ? {} : { rwToken: h.roToken, roToken: undefined }),
               readonly: false,
               pendingCreate: undefined,
               rwConfirmed: true,
             });
           }
         } else if (h.rwToken) {
-          // The token we stored as rw (kind unknown until now) is actually
-          // read-only; move it so nothing (e.g. the upload queue) treats this
-          // handle as writable.
-          updateHandle(docId, {
-            rwToken: undefined,
-            roToken: h.rwToken,
-            readonly: true,
-            rwConfirmed: undefined,
-          });
+          const untried = h.roToken && h.roToken !== h.rwToken ? h.roToken : undefined;
+          if (untried && !h.rwConfirmed) {
+            // The primary token turned out read-only, but we hold a second
+            // candidate of unknown kind (joinInventory stashes a superseded
+            // unconfirmed token there). A doc has exactly one rw and one ro
+            // token, so two distinct candidates cannot both be read-only:
+            // swap and re-authenticate. This cannot loop — the swapped-in
+            // token is either granted rw or rejected, never demoted again.
+            updateHandle(docId, {
+              rwToken: untried,
+              roToken: h.rwToken,
+              readonly: false,
+              rwConfirmed: undefined,
+            });
+            // Rebuild outside this provider callback: resyncDoc destroys the
+            // provider we are currently running inside.
+            setTimeout(() => resyncDoc(docId, { tokenChanged: true }), 0);
+          } else {
+            // The token we stored as rw (kind unknown until now) is actually
+            // read-only; move it so nothing (e.g. the upload queue) treats
+            // this handle as writable.
+            updateHandle(docId, {
+              rwToken: undefined,
+              roToken: h.rwToken,
+              readonly: true,
+              rwConfirmed: undefined,
+            });
+          }
         } else if (!h.readonly) {
           updateHandle(docId, { readonly: true });
         }
@@ -177,6 +247,28 @@ function attachSyncProvider(entry: DocEntry): void {
       onAuthenticationFailed: ({ reason }) => {
         // Local cached data stays fully readable; we just can't sync.
         console.warn(`[store] sync auth failed for ${docId}: ${reason}`);
+        const h = getStoredHandle(docId);
+        // A rejected primary token that was never server-confirmed may just
+        // be the wrong one of two stored candidates: swap and retry once per
+        // session instead of parking the doc in 'error'. Nothing is dropped,
+        // so a wrong guess costs one extra handshake at most.
+        if (
+          h?.rwToken &&
+          h.roToken &&
+          h.roToken !== h.rwToken &&
+          !h.rwConfirmed &&
+          !h.pendingCreate &&
+          !authFallbackTried.has(docId)
+        ) {
+          authFallbackTried.add(docId);
+          updateHandle(docId, {
+            rwToken: h.roToken,
+            roToken: h.rwToken,
+            rwConfirmed: undefined,
+          });
+          setTimeout(() => resyncDoc(docId, { tokenChanged: true }), 0);
+          return;
+        }
         setStatus(entry, 'error');
         // Rejection is deterministic for a given token: stop the provider's
         // (otherwise unlimited) reconnect loop. resyncDoc() re-enables it.
@@ -240,6 +332,9 @@ export function openDoc(docId: Id): DocEntry {
 
   idb.whenSynced.then(() => {
     entry.loaded = true;
+    // Offline-opened docs get the owner-directory update here; online ones
+    // also refresh it on every server sync.
+    recordOwner(entry);
     bump(entry);
   });
 
@@ -263,6 +358,11 @@ export function openDoc(docId: Id): DocEntry {
     ) {
       stampSynced(docId);
     }
+    // Re-check the owner directory once the burst settles: the initial sync
+    // of a joined doc applies the encrypted log asynchronously, so the
+    // load/sync-time recordOwner calls can run before the directory exists.
+    clearTimeout(entry.ownerTimer);
+    entry.ownerTimer = setTimeout(() => recordOwner(entry), 800);
     bump(entry);
   });
 
@@ -313,6 +413,7 @@ export async function closeDoc(docId: Id, opts?: { clearData?: boolean }): Promi
     return;
   }
   entries.delete(docId);
+  clearTimeout(entry.ownerTimer);
   try {
     entry.provider?.destroy();
   } catch { /* ignore */ }
@@ -353,9 +454,14 @@ export function readLists(doc: Y.Doc): SavedList[] {
 export function readDevices(doc: Y.Doc): DevicePresence[] {
   const out: DevicePresence[] = [];
   doc.getMap<unknown>('devices').forEach((v) => {
-    const d = v as { id?: unknown; label?: unknown; at?: unknown };
+    const d = v as { id?: unknown; label?: unknown; at?: unknown; ownerId?: unknown };
     if (typeof d?.id === 'string' && typeof d.label === 'string' && typeof d.at === 'number') {
-      out.push({ id: d.id, label: d.label, at: d.at });
+      out.push({
+        id: d.id,
+        label: d.label,
+        at: d.at,
+        ...(typeof d.ownerId === 'string' ? { ownerId: d.ownerId } : {}),
+      });
     }
   });
   out.sort((a, b) => b.at - a.at);

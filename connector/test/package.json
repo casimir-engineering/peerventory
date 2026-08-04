@@ -1,0 +1,15 @@
+{
+  "name": "peerventory-connector-tests",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "node run-tests.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.3",
+    "playwright": "1.62.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}

@@ -41,7 +41,7 @@ import {
   parseAmountInput,
 } from '../components/Fields';
 import type { AiFieldKey } from '../components/Fields';
-import { Modal } from '../components/Modal';
+import { ConfirmModal, Modal } from '../components/Modal';
 import { SmartCombo } from '../components/SmartCombo';
 import { OcrScanner } from '../components/OcrScanner';
 import { PhotoPickerButton, ROLE_LABEL } from '../components/Photos';
@@ -51,6 +51,7 @@ import { formatCoords, parseTags } from '../lib/format';
 import { matchSerial } from '../lib/serial';
 import { getLocationWithPlace } from '../lib/geo';
 import { downscaleImage } from '../lib/image';
+import { registerNavigationGuard } from '../lib/navGuard';
 import '../entry.css';
 
 interface PendingPhoto {
@@ -59,6 +60,12 @@ interface PendingPhoto {
   url: string;
   role: PhotoRole;
 }
+
+const CONDITION_PRESETS = ['New', 'Like new', 'Very good', 'Good', 'Acceptable', 'For parts'];
+
+/** Ids of the collapsible optional sections, as stored in meta.fieldPrefs. */
+const SECTION_CATEGORY_TAGS = 'categoryTags';
+const SECTION_CUSTOMS = 'customs';
 
 /** Recent entries for this key first, then whatever the inventory already holds. */
 function mergeSuggestions(key: string, existing: string[]): string[] {
@@ -138,6 +145,86 @@ export function NewItemPage() {
   // disabled button, and each one would otherwise create its own item.
   const savingRef = useRef(false);
 
+  // Pending navigation waiting on the "Discard this item?" confirm; null when
+  // the dialog is closed. Stores the action so back-link, Android back and
+  // future exits all share one dialog.
+  const [leaveAction, setLeaveAction] = useState<(() => void) | null>(null);
+
+  // "Save and add another" deliberately keeps some fields (box, location,
+  // category, country, acquisition, owner) for the next item. Those count as
+  // dirty only when they differ from this baseline, so a save leaves the form
+  // clean even though the sticky fields still hold values.
+  const stickyBaseline = useRef({
+    category: '',
+    countryOfOrigin: '',
+    acquisition: '' as '' | AcquisitionMethod,
+    boxId: '',
+    locationLabel: '',
+    owner: owner.trim(),
+    ownerDisabled: false,
+  });
+
+  const dirty =
+    photos.length > 0 ||
+    description.trim() !== '' ||
+    quantity !== 1 ||
+    valueCurrent.trim() !== '' ||
+    valueNew.trim() !== '' ||
+    weight !== null ||
+    dimensions !== null ||
+    tags.trim() !== '' ||
+    serialNumber.trim() !== '' ||
+    purchaseDate !== '' ||
+    purchasePrice.trim() !== '' ||
+    vendor.trim() !== '' ||
+    condition.trim() !== '' ||
+    lithiumBattery ||
+    notes.trim() !== '' ||
+    brandModel.trim() !== '' ||
+    hsCode.trim() !== '' ||
+    translations !== null ||
+    category.trim() !== stickyBaseline.current.category ||
+    countryOfOrigin.trim() !== stickyBaseline.current.countryOfOrigin ||
+    acquisition !== stickyBaseline.current.acquisition ||
+    boxId !== stickyBaseline.current.boxId ||
+    locationLabel.trim() !== stickyBaseline.current.locationLabel ||
+    owner.trim() !== stickyBaseline.current.owner ||
+    ownerDisabled !== stickyBaseline.current.ownerDisabled;
+
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+
+  // Android system back: claim the action while dirty and ask first
+  // (main.tsx runs this guard before walking history).
+  useEffect(
+    () =>
+      registerNavigationGuard(() => {
+        if (!dirtyRef.current || savingRef.current) return false;
+        setLeaveAction(() => () => window.history.back());
+        return true;
+      }),
+    [],
+  );
+
+  // Tab close / refresh on the web while dirty.
+  useEffect(() => {
+    if (!dirty) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
+  // Which optional sections start expanded: exactly the ones ever filled in
+  // this inventory (meta.fieldPrefs, synced). Captured once when the meta is
+  // available so later meta updates don't force a <details> the user closed.
+  const initialExpanded = useRef<Set<string> | null>(null);
+  if (inv.loaded && initialExpanded.current === null) {
+    initialExpanded.current = new Set(inv.meta?.fieldPrefs?.expanded ?? []);
+  }
+
   // Ask for a fix as soon as the screen opens: by the time the photo and the
   // description are in, the coordinates are usually already there.
   useEffect(() => {
@@ -147,7 +234,14 @@ export function NewItemPage() {
       setLocation({ time: entry.time, lat: entry.lat, lon: entry.lon });
       setLocationSource('gps');
       const nearby = entry.label;
-      if (nearby) setLocationLabel((prev) => (prev.trim() === '' ? nearby : prev));
+      // Auto-filled, not user-entered: move the dirty baseline along with it.
+      if (nearby) {
+        setLocationLabel((prev) => {
+          if (prev.trim() !== '') return prev;
+          stickyBaseline.current.locationLabel = nearby.trim();
+          return nearby;
+        });
+      }
     });
     return () => {
       cancelled = true;
@@ -213,6 +307,15 @@ export function NewItemPage() {
     () => categoryOptions.map((name) => ({ value: name, label: name })),
     [categoryOptions],
   );
+
+  const conditionOptions = useMemo(() => {
+    const out = [...CONDITION_PRESETS];
+    for (const item of items) {
+      const value = item.condition?.trim();
+      if (value && !out.includes(value)) out.push(value);
+    }
+    return out.map((name) => ({ value: name, label: name }));
+  }, [items]);
 
   const addPhotos = async (files: File[], role: PhotoRole) => {
     setPhotoBusy(true);
@@ -376,6 +479,16 @@ export function NewItemPage() {
     setBrandModel('');
     setHsCode('');
     setTranslations(null);
+    // The kept fields become the new clean baseline for the dirty check.
+    stickyBaseline.current = {
+      category: category.trim(),
+      countryOfOrigin: countryOfOrigin.trim(),
+      acquisition,
+      boxId,
+      locationLabel: locationLabel.trim(),
+      owner: owner.trim(),
+      ownerDisabled,
+    };
     focusedOnce.current = false;
     window.scrollTo({ top: 0, behavior: 'smooth' });
     descRef.current?.focus();
@@ -400,6 +513,39 @@ export function NewItemPage() {
       }
     } catch {
       /* remembering is never worth a failed save */
+    }
+  };
+
+  /**
+   * Optional-field memory, synced: once a section's fields are actually used
+   * in this inventory, it joins meta.fieldPrefs.expanded (union only, never
+   * pruned) and every device pre-expands it on the next item creation.
+   */
+  const rememberFieldPrefs = (draft: ItemDraft) => {
+    try {
+      if (inv.readonly) return;
+      const used: string[] = [];
+      if (draft.category || (draft.tags?.length ?? 0) > 0) used.push(SECTION_CATEGORY_TAGS);
+      if (
+        draft.serialNumber ||
+        draft.purchase ||
+        draft.boxId ||
+        draft.condition ||
+        draft.lithiumBattery ||
+        draft.countryOfOrigin ||
+        draft.acquisition ||
+        draft.notes ||
+        draft.brandModel ||
+        draft.hsCode ||
+        draft.translations
+      ) {
+        used.push(SECTION_CUSTOMS);
+      }
+      const prev = inv.meta?.fieldPrefs?.expanded ?? [];
+      const added = used.filter((id) => !prev.includes(id));
+      if (added.length > 0) inv.updateMeta({ fieldPrefs: { expanded: [...prev, ...added] } });
+    } catch {
+      /* prefs are never worth a failed save */
     }
   };
 
@@ -451,6 +597,7 @@ export function NewItemPage() {
       const itemId: Id = inv.createItem(draft);
 
       rememberEntries(initialLocation, draft.valueCurrent?.currency ?? draft.valueNew?.currency);
+      rememberFieldPrefs(draft);
 
       // The item exists from here on, so a failing photo must not read as a
       // failed save: that would invite a second tap and a duplicate item.
@@ -517,12 +664,26 @@ export function NewItemPage() {
 
   return (
     <>
-      <AppHeader
-        title="New item"
-        subtitle={inv.meta?.name}
-        back={`/inv/${docId}`}
-        status={inv.syncStatus}
-      />
+      {/* display:contents keeps the header's sticky layout while letting a
+          capture-phase handler intercept the back button (the only <button>
+          this header renders) without modifying AppHeader itself. */}
+      <div
+        style={{ display: 'contents' }}
+        onClickCapture={(e) => {
+          if (!(e.target as HTMLElement).closest('button[aria-label="Back"]')) return;
+          if (!dirtyRef.current || savingRef.current) return;
+          e.preventDefault();
+          e.stopPropagation();
+          setLeaveAction(() => () => navigate(`/inv/${docId}`));
+        }}
+      >
+        <AppHeader
+          title="New item"
+          subtitle={inv.meta?.name}
+          back={`/inv/${docId}`}
+          status={inv.syncStatus}
+        />
+      </div>
 
       <main className="page narrow">
         <div className="stack loose">
@@ -671,7 +832,11 @@ export function NewItemPage() {
                   setLocation({ time: entry.time, lat: entry.lat, lon: entry.lon });
                   setLocationSource('gps');
                   const nearby = entry.label;
-                  if (nearby && locationLabel.trim() === '') setLocationLabel(nearby);
+                  if (nearby && locationLabel.trim() === '') {
+                    // Auto-filled place name, not typed: keep the form clean.
+                    stickyBaseline.current.locationLabel = nearby.trim();
+                    setLocationLabel(nearby);
+                  }
                   toast('Position updated');
                 }}
               >
@@ -717,8 +882,13 @@ export function NewItemPage() {
             </section>
           ) : null}
 
-          {/* 7. Optional detail */}
-          <details className="disclosure">
+          {/* 7. Optional detail. Sections whose fields were ever filled in
+              this inventory (meta.fieldPrefs, synced) start expanded; the
+              constant `open` prop never fights the user's own toggling. */}
+          <details
+            className="disclosure"
+            open={initialExpanded.current?.has(SECTION_CATEGORY_TAGS) || undefined}
+          >
             <summary>Category and tags (optional)</summary>
             <div className="disclosure-body">
               <Field label="Category">
@@ -742,7 +912,10 @@ export function NewItemPage() {
             </div>
           </details>
 
-          <details className="disclosure">
+          <details
+            className="disclosure"
+            open={initialExpanded.current?.has(SECTION_CUSTOMS) || undefined}
+          >
             <summary>Customs details (optional)</summary>
             <div className="disclosure-body">
               <div className="serial-row">
@@ -812,11 +985,13 @@ export function NewItemPage() {
               </Field>
 
               <Field label="Condition">
-                <input
-                  className="input"
+                <SmartCombo
                   value={condition}
+                  options={conditionOptions}
                   placeholder="Good, minor scratches"
-                  onChange={(e) => setCondition(e.target.value)}
+                  ariaLabel="Condition"
+                  onInput={setCondition}
+                  onCommit={setCondition}
                 />
               </Field>
 
@@ -949,6 +1124,18 @@ export function NewItemPage() {
             }}
           />
         </Modal>
+      ) : null}
+
+      {leaveAction ? (
+        <ConfirmModal
+          title="Discard this item?"
+          body="This item has not been saved. Leaving now discards the photos and details you entered."
+          confirmLabel="Discard"
+          cancelLabel="Keep editing"
+          destructive
+          onConfirm={leaveAction}
+          onClose={() => setLeaveAction(null)}
+        />
       ) : null}
 
       {newBoxOpen ? (

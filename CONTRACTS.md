@@ -122,8 +122,9 @@ Design alternatives considered (decision record):
   A link without `/k/` still joins (tokens grant relay access) but the device
   cannot decrypt: the UI shows "Encryption key missing" until a full link or
   QR code delivers the key.
-- Backup payload v2: handle entries carry `ek` (content key); v1 payloads
-  (no keys) are still accepted on restore.
+- Backup payload v2: handle entries carry `ek` (content key) and the payload
+  carries `oi` (the user's stable owner id, see "Owner identity"); v1
+  payloads (no keys) and payloads without `oi` are still accepted on restore.
 
 ## Blob API (photos)
 
@@ -165,11 +166,36 @@ All services degrade silently offline; the app never blocks on them.
 - `currency.ts`: `ensureRates(): Promise<void>` (fetch https://open.er-api.com/v6/latest/USD once per 24h, cache in localStorage `fx:v1`, keep stale cache offline); `convert(amount: number, from: string, to: string): number | null`; `knownCurrencies(): string[]`; `ratesAgeMs(): number | null`.
 - `units.ts`: `parseWeightToGrams(input: string): number | null` (accepts `200`, `200g`, `0.2 kg`, `1.5kg`, `2 lb`, `3oz`, comma decimals; bare number = grams); `formatGrams(g: number): string` (< 1000 -> `850 g`, else `1.5 kg`); `parseLengthToMm(input: string): number | null` (mm/cm/m/in; bare number = mm); `formatMm(mm: number): string` (mm < 100, cm < 1000, else m); `weightGramsOfItem(item): { grams: number; estimated: boolean }` (exactGrams or class midpoint, gt20kg -> minG); `volumeM3OfItem(item): { m3: number; estimated: boolean }` (exact L*W*H else SIZE_CLASSES approxLiters; per single unit, caller multiplies by quantity).
 - `geocode.ts`: `searchPlaces(query: string): Promise<PlaceHit[]>` (Photon `https://photon.komoot.io/api/?q=...&limit=6&lang=en`; `PlaceHit = { label: string; lat: number; lon: number }`; [] on any failure); `rememberPlace(label, lat, lon)` (localStorage `places:v1`, dedupe by label+~coords); `nearestPlaceLabel(lat, lon, maxMeters = 250): string | null` (haversine, closest under threshold).
-- `profile.ts`: `getUserName() / setUserName(name)` (localStorage `profile:v1`); `ownerAliasFor(docId) / setOwnerAlias(docId, name)`; `effectiveOwnerName(docId)` = alias ?? username; `rememberInput(key, value)` / `suggestInputs(key): string[]` (generic recent-values history `inputs:v1`, most-recent-first, cap 20 per key; keys in use: `currency`, `category`, `vendor`, `country`, `owner`); `getLastCurrency() / setLastCurrency(code)`.
+- `profile.ts`: `getUserName() / setUserName(name)` (localStorage `profile:v1`); `getOwnerId()` (stable owner id, generated once — see "Owner identity"); `effectiveOwnerId(docId)` = per-doc linked owner id ?? `getOwnerId()`; `ownerAliasFor(docId) / setOwnerAlias(docId, name)`; `effectiveOwnerName(docId)` = alias ?? username; `subscribeOwnerName(cb)` (fires on name/alias/owner-link changes; the store uses it to push renames into open docs); `rememberInput(key, value)` / `suggestInputs(key): string[]` (generic recent-values history `inputs:v1`, most-recent-first, cap 20 per key; keys in use: `currency`, `category`, `vendor`, `country`, `owner`); `getLastCurrency() / setLastCurrency(code)`.
 - `ai.ts`: `analyzeItemPhotos(docId, photos: Blob[], context: { description?: string; mainCurrency: string }): Promise<AiSuggestions>` — calls the Anthropic Messages API DIRECTLY from the device (CORS via `anthropic-dangerous-direct-browser-access`), using the per-device key from `aikey.ts`. Photos are downscaled to 1024px JPEG before upload to keep vision-token cost low. Throws `Error` with a user-displayable message on failure.
 - `aikey.ts`: per-device Anthropic key in localStorage `aiKey:v1` (never synced, never sent to our server). `getAiKey/setAiKey/clearAiKey/maskedAiKey`, and QR provisioning: a scanned code `inv-ai:<key>` (see `parseAiKeyQr`, handled by the Open/Scan flow) installs the key on the device.
 
 `AiSuggestions` (all fields optional): `description, category, tags: string[], brandModel, valueCurrent: {amount,currency}, valueNew: {amount,currency}, weightGrams: number, dimensionsMm: {l,w,h}, lithiumBattery: boolean, countryOfOrigin, hsCode, condition, translations: Record<string,string>`.
+
+## Owner identity (stable owner ids)
+
+Owners are identified by a stable id, not by display-name strings, so a
+rename propagates to every synced copy. All changes are additive: docs and
+backups from before owner ids keep working.
+
+- Profile: each user has a permanent `ownerId` (10-char nanoid), generated
+  once in `services/profile.ts`, stored in localStorage `profile:v1` and
+  carried in device backups (`oi`) so all of a user's devices share it.
+- Owners directory: the inner doc has a `Y.Map('owners')` mapping
+  `ownerId -> { name, updatedAt }` (current display name). Every device with
+  write access (and the content key) upserts its user's entry on doc
+  load/sync and whenever the profile name or per-doc alias changes.
+- `ownerHistory` entries are `{ time, ownerId?, owner }`: new entries always
+  carry `ownerId` plus the name at write time; legacy entries only have the
+  string. Display resolution: `ownerId` -> directory current name -> stored
+  `owner` string (`ownerDisplayName()` in `store/owners.ts`).
+- Name matching: the first time a user appears in a doc, an existing
+  directory entry with the same display name (case-insensitive) is adopted
+  instead of duplicated — the adopted id is remembered per doc in the profile
+  (`effectiveOwnerId(docId)`). Transfers to a name already in the directory
+  reuse that entry's id; unknown names mint a fresh id and register it.
+- Device presence entries (`devices` map) additionally carry the writer's
+  `ownerId` when the user has a name.
 
 ## AI endpoint (server) — DEPRECATED
 

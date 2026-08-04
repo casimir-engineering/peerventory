@@ -9,17 +9,13 @@ export function hasOpenModal(): boolean {
   return openModalCount > 0;
 }
 
-export function Modal({
-  title,
-  onClose,
-  children,
-  footer,
-}: {
-  title: string;
-  onClose: () => void;
-  children: ReactNode;
-  footer?: ReactNode;
-}) {
+/**
+ * Joins the open-modal counter and closes on Escape. The two are one
+ * mechanism: the Android back handler dismisses whatever is counted here by
+ * dispatching a synthetic Escape, so anything counted must close on it.
+ * For fullscreen overlays that are not <Modal> (e.g. the photo lightbox).
+ */
+export function useModalDismiss(onClose: () => void): void {
   useEffect(() => {
     openModalCount++;
     return () => {
@@ -34,6 +30,20 @@ export function Modal({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
+}
+
+export function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  footer?: ReactNode;
+}) {
+  useModalDismiss(onClose);
 
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -55,6 +65,7 @@ export function ConfirmModal({
   title,
   body,
   confirmLabel = 'Confirm',
+  cancelLabel = 'Cancel',
   destructive,
   onConfirm,
   onClose,
@@ -62,6 +73,7 @@ export function ConfirmModal({
   title: string;
   body: string;
   confirmLabel?: string;
+  cancelLabel?: string;
   destructive?: boolean;
   onConfirm: () => void;
   onClose: () => void;
@@ -73,7 +85,7 @@ export function ConfirmModal({
       footer={
         <>
           <button type="button" className="btn grow" onClick={onClose}>
-            Cancel
+            {cancelLabel}
           </button>
           <button
             type="button"

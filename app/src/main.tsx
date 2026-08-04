@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { registerSW } from 'virtual:pwa-register';
 import App from './App';
 import { hasOpenModal } from './ui/components/Modal';
+import { runNavigationGuards } from './ui/lib/navGuard';
 
 // The service worker exists for offline use of the *website*. Inside the
 // Capacitor APK the assets are already bundled locally, and a SW would keep
@@ -30,6 +31,9 @@ if (Capacitor.isNativePlatform()) {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
         return;
       }
+      // A page with unsaved state may claim the back action (it shows its own
+      // confirm dialog and navigates itself on discard).
+      if (runNavigationGuards()) return;
       const hash = window.location.hash;
       const atRoot = hash === '' || hash === '#' || hash === '#/';
       if (atRoot) void CapacitorApp.exitApp();
