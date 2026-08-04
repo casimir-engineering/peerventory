@@ -422,9 +422,12 @@
     );
   }
 
-  /** How long runFill waits for site.formReady() (a manual step like the
-   * Anibis category pick can gate the fields). */
-  const FORM_READY_TIMEOUT_MS = 90_000;
+  /** How long runFill waits for site.formReady(). A manual step like the
+   * Anibis category pick can gate the fields, and a human browsing the
+   * category menu easily takes minutes — a short timeout here made the fill
+   * report "field not found" while the user was still choosing, which read
+   * as a hard failure. */
+  const FORM_READY_TIMEOUT_MS = 10 * 60_000;
 
   /** One fill run: payload from storage -> fields -> overlay -> result object. */
   async function runFill(site) {
@@ -462,17 +465,34 @@
         note: `Attach failed (${err}) — use "Photos" in the popup instead.`,
       };
     }
+    let formTimedOut = false;
     if (site.formReady && !site.formReady()) {
-      showWaitingHint(site.label, site.waitHint || 'Waiting for the listing form to appear…');
+      // waitHint may be a function so sites can explain WHY the manual step
+      // is needed (e.g. which category text failed to match).
+      const hint =
+        (typeof site.waitHint === 'function' ? site.waitHint(payload.item) : site.waitHint) ||
+        'Waiting for the listing form to appear…';
+      showWaitingHint(site.label, hint);
       const deadline = Date.now() + FORM_READY_TIMEOUT_MS;
       while (Date.now() < deadline && !site.formReady()) {
         await new Promise((r) => setTimeout(r, 500));
       }
-      // On timeout, fall through: the fields report "not found" honestly.
+      formTimedOut = !site.formReady();
     }
     try {
       const results = [...prepRows, ...fillFields(site.buildFields(payload.item), payload.item)];
       if (photosRow) results.push(photosRow);
+      if (formTimedOut) {
+        // Don't let a wall of "field not found" look like a bug: say what
+        // actually happened and how to recover.
+        results.unshift({
+          key: 'form',
+          label: 'Listing form',
+          status: 'notfound',
+          value: '',
+          note: 'The form fields never appeared (category not picked?). Pick a category, then click Sell again in the popup.',
+        });
+      }
       showOverlay(site.label, results, payload);
       return { ok: true, site: site.label, results };
     } catch (err) {
@@ -513,7 +533,9 @@
    *   isListingPage() -> bool,
    *   buildFields(payloadItem) -> fields,
    *   formReady?() -> bool,   // fields exist (a manual step may gate them)
-   *   waitHint?: string,      // shown while waiting for formReady()
+   *   waitHint?: string | (payloadItem) -> string,  // shown while waiting
+   *                           // for formReady(); function form can explain
+   *                           // why the manual step is needed
    *   prepare?(payloadItem) -> Promise<resultRows>, // automated pre-step
    *                           // (e.g. Anibis category menu); [] = do it manually
    *   photoInput?() -> input[type=file] | null,  // where staged photos go

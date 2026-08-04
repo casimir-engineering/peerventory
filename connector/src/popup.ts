@@ -415,7 +415,7 @@ async function downloadItemPhotos(item: ExtItem): Promise<void> {
   setStatus(
     status,
     saved > 0
-      ? `${saved} photo(s) downloaded — drag the files into the listing form.`
+      ? `${saved} photo(s) downloaded — only needed if the automatic attach didn't work; drag them into the form.`
       : 'No photos could be fetched (offline or blob missing).',
     saved > 0 ? 'ok' : 'err',
   );
@@ -493,7 +493,8 @@ function itemRow(item: ExtItem, inventoryName: string): HTMLElement {
   if (item.photos.length > 0) {
     const btn = document.createElement('button');
     btn.textContent = `Photos (${item.photos.length})`;
-    btn.title = 'Download decrypted photos to drag into the listing form';
+    btn.title =
+      'Download decrypted photos as files (manual fallback — Sell attaches them automatically)';
     btn.addEventListener('click', () => void downloadItemPhotos(item));
     actions.appendChild(btn);
   }

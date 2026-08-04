@@ -64,25 +64,25 @@
    * Keys match whole tokens of the item's category (plural-insensitive).
    */
   const CATEGORY_SYNONYMS = [
-    { keys: ['lighting', 'light', 'lamp', 'lampe', 'luminaire', 'leuchte', 'lustre'], path: ['maison', 'luminaires'] },
-    { keys: ['furniture', 'meuble', 'mobilier', 'moebel', 'mobel', 'sofa', 'canape', 'armoire', 'table', 'chaise'], path: ['maison', 'mobilier'] },
-    { keys: ['appliance', 'electromenager', 'kitchen', 'cuisine', 'ustensile'], path: ['maison', 'electromenager'] },
-    { keys: ['deco', 'decor', 'decoration', 'dekoration'], path: ['maison', 'deco'] },
-    { keys: ['electronic', 'electronique', 'elektronik', 'informatique', 'computer', 'ordinateur', 'laptop', 'notebook', 'pc', 'tablet', 'tablette', 'imprimante', 'printer', 'ecran', 'monitor'], path: ['informatique'] },
-    { keys: ['phone', 'telephone', 'telephonie', 'smartphone', 'iphone', 'natel', 'handy', 'gps', 'navigation'], path: ['telephonie'] },
-    { keys: ['tv', 'television', 'audio', 'hifi', 'speaker', 'enceinte', 'casque', 'headphone', 'ampli'], path: ['tv audio'] },
-    { keys: ['photo', 'camera', 'video', 'objectif', 'drone'], path: ['photo video'] },
-    { keys: ['tool', 'outil', 'outillage', 'werkzeug', 'garden', 'jardin', 'garten', 'perceuse', 'drill', 'tondeuse'], path: ['jardin outils'] },
-    { keys: ['toy', 'jouet', 'spielzeug', 'lego', 'playmobil', 'puzzle', 'modelisme'], path: ['jouets'] },
-    { keys: ['book', 'livre', 'buch', 'bd', 'comic', 'manga'], path: ['livres'] },
-    { keys: ['music', 'musique', 'musik', 'instrument', 'guitare', 'guitar', 'piano', 'vinyle', 'vinyl'], path: ['musique'] },
-    { keys: ['sport', 'outdoor', 'fitness', 'velo', 'bike', 'fahrrad', 'ski', 'camping', 'randonnee'], path: ['sport'] },
-    { keys: ['clothing', 'clothes', 'vetement', 'kleider', 'fashion', 'shoe', 'chaussure', 'schuhe', 'sac', 'bag', 'montre', 'watch', 'uhr', 'bijou', 'jewelry'], path: ['vetements'] },
-    { keys: ['baby', 'bebe', 'enfant', 'kind', 'kid', 'poussette'], path: ['bebe enfant'] },
+    { keys: ['lighting', 'light', 'lamp', 'lampe', 'luminaire', 'leuchte', 'lustre', 'eclairage', 'beleuchtung', 'lampadaire'], path: ['maison', 'luminaires'] },
+    { keys: ['furniture', 'meuble', 'mobilier', 'moebel', 'mobel', 'sofa', 'canape', 'armoire', 'table', 'chaise', 'fauteuil', 'etagere', 'commode', 'kommode', 'schrank', 'regal'], path: ['maison', 'mobilier'] },
+    { keys: ['appliance', 'electromenager', 'kitchen', 'cuisine', 'ustensile', 'haushalt', 'frigo', 'fridge', 'aspirateur', 'vacuum'], path: ['maison', 'electromenager'] },
+    { keys: ['deco', 'decor', 'decoration', 'dekoration', 'vase', 'tapis', 'carpet', 'rug', 'coussin', 'rideau'], path: ['maison', 'deco'] },
+    { keys: ['electronic', 'electronique', 'elektronik', 'informatique', 'computer', 'ordinateur', 'laptop', 'notebook', 'macbook', 'imac', 'pc', 'tablet', 'tablette', 'ipad', 'imprimante', 'printer', 'drucker', 'ecran', 'monitor', 'screen', 'clavier', 'keyboard', 'souris', 'router', 'routeur', 'serveur', 'server', 'nas', 'disque', 'ssd'], path: ['informatique'] },
+    { keys: ['phone', 'telephone', 'telephonie', 'telefon', 'smartphone', 'iphone', 'natel', 'handy', 'gps', 'navigation'], path: ['telephonie'] },
+    { keys: ['tv', 'television', 'fernseher', 'audio', 'hifi', 'stereo', 'speaker', 'enceinte', 'lautsprecher', 'soundbar', 'casque', 'headphone', 'kopfhorer', 'ampli', 'amplifier', 'amplificateur', 'platine', 'turntable', 'beamer', 'projecteur', 'projector'], path: ['tv audio'] },
+    { keys: ['photo', 'camera', 'video', 'objectif', 'lens', 'drone', 'gopro', 'reflex'], path: ['photo video'] },
+    { keys: ['tool', 'outil', 'outillage', 'werkzeug', 'garden', 'jardin', 'garten', 'perceuse', 'drill', 'bohrmaschine', 'tondeuse', 'scie', 'saw', 'marteau', 'hammer', 'echelle', 'ladder', 'visseuse', 'ponceuse'], path: ['jardin outils'] },
+    { keys: ['toy', 'jouet', 'spielzeug', 'lego', 'playmobil', 'puzzle', 'modelisme', 'jeu', 'game', 'spiel', 'peluche'], path: ['jouets'] },
+    { keys: ['book', 'livre', 'buch', 'bucher', 'bd', 'comic', 'manga', 'roman', 'magazine', 'revue'], path: ['livres'] },
+    { keys: ['music', 'musique', 'musik', 'instrument', 'guitare', 'guitar', 'gitarre', 'piano', 'synthesizer', 'vinyle', 'vinyl', 'schallplatte'], path: ['musique'] },
+    { keys: ['sport', 'outdoor', 'fitness', 'velo', 'bike', 'bicycle', 'fahrrad', 'vtt', 'trottinette', 'skateboard', 'ski', 'snowboard', 'camping', 'tente', 'tent', 'zelt', 'randonnee', 'tennis', 'golf'], path: ['sport'] },
+    { keys: ['clothing', 'clothes', 'vetement', 'kleider', 'kleidung', 'fashion', 'shoe', 'chaussure', 'schuhe', 'basket', 'sneaker', 'veste', 'jacket', 'jacke', 'manteau', 'pantalon', 'robe', 'dress', 'pull', 'shirt', 'tshirt', 'jeans', 'sac', 'bag', 'tasche', 'montre', 'watch', 'uhr', 'bijou', 'jewelry', 'schmuck'], path: ['vetements'] },
+    { keys: ['baby', 'bebe', 'enfant', 'kind', 'kid', 'poussette', 'kinderwagen', 'stroller'], path: ['bebe enfant'] },
     { keys: ['animal', 'animaux', 'pet', 'tier', 'chien', 'dog', 'hund', 'chat', 'katze', 'aquarium'], path: ['animaux'] },
-    { keys: ['car', 'auto', 'voiture', 'vehicule', 'moto', 'scooter', 'pneu', 'tire'], path: ['vehicules'] },
-    { keys: ['art', 'antique', 'antiquite', 'antiquitat', 'tableau', 'painting', 'sculpture'], path: ['art antiquites'] },
-    { keys: ['collection', 'collectible', 'sammeln', 'timbre', 'stamp', 'piece', 'coin'], path: ['objets de collection'] },
+    { keys: ['car', 'auto', 'voiture', 'vehicule', 'moto', 'motorrad', 'scooter', 'roller', 'pneu', 'tire', 'reifen', 'remorque'], path: ['vehicules'] },
+    { keys: ['art', 'antique', 'antiquite', 'antiquitat', 'tableau', 'painting', 'gemalde', 'sculpture'], path: ['art antiquites'] },
+    { keys: ['collection', 'collectible', 'sammeln', 'timbre', 'stamp', 'briefmarke', 'piece', 'coin', 'munze'], path: ['objets de collection'] },
     { keys: ['office', 'bureau', 'buro', 'commerce'], path: ['bureau commerce'] },
     { keys: ['film', 'movie', 'dvd', 'bluray'], path: ['films'] },
     { keys: ['ticket', 'billet', 'bon', 'voucher', 'gutschein'], path: ['billetterie'] },
@@ -109,6 +109,17 @@
     return 0;
   }
 
+  /** Words too generic to identify a category on their own (second pass). */
+  const STOPWORDS = new Set([
+    'et', 'de', 'des', 'du', 'la', 'le', 'les', 'un', 'une', 'pour', 'sans', 'avec',
+    'and', 'the', 'for', 'with', 'und', 'mit', 'fur',
+    'autre', 'autres', 'divers', 'other', 'misc', 'stuff', 'via',
+  ]);
+
+  function significantWords(s) {
+    return s.split(' ').filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+  }
+
   const BACK_RE = /^(retour|zuruck|indietro|back)$/;
 
   /** MUI keeps closed menus mounted with visibility:hidden (which still has
@@ -127,6 +138,7 @@
   }
 
   function bestOption(items, targetNorm) {
+    // Pass 1: exact / containment.
     let best = null;
     let bestScore = 0;
     for (const li of items) {
@@ -138,7 +150,21 @@
         bestScore = s;
       }
     }
-    return bestScore >= 2 ? best : null;
+    if (bestScore >= 2) return best;
+    // Pass 2, fuzzier but safe: a significant whole word of the target
+    // matches a significant word of a label ("ordinateur portable" ~
+    // "Ordinateurs portables") — only when EXACTLY ONE option matches, so
+    // an ambiguous word can never pick a wrong category.
+    const targetWords = significantWords(targetNorm);
+    if (targetWords.length === 0) return null;
+    const hits = [];
+    for (const li of items) {
+      const label = norm(li.textContent);
+      if (BACK_RE.test(label)) continue;
+      const labelWords = significantWords(label);
+      if (targetWords.some((t) => labelWords.some((l) => tokenMatches(t, l)))) hits.push(li);
+    }
+    return hits.length === 1 ? hits[0] : null;
   }
 
   /** MUI menus listen for real mouse events; .click() alone also works but
@@ -183,6 +209,9 @@
   /** The category path picked by prepare(); makes buildFields skip the manual
    * category hint. */
   let autoPickedPath = null;
+  /** Why the auto-pick stood down: 'no-category' | 'no-match' | 'no-menu'.
+   * Drives the waiting hint so the fallback never looks like a silent bug. */
+  let autoPickFail = null;
 
   /**
    * Click through the cascading category menu, matching each level's scraped
@@ -191,14 +220,24 @@
    */
   async function autoPickCategory(item) {
     const catNorm = norm(item.category);
-    if (!catNorm) return null;
+    if (!catNorm) {
+      autoPickFail = 'no-category';
+      return null;
+    }
     // The SPA may still be rendering when the fill starts (pending flow).
     const opener = await waitFor(() => site.formReady() || categoryOpener(), 10_000, 300);
-    if (!opener || site.formReady()) return null; // already picked / no picker
+    if (site.formReady()) return null; // already picked
+    if (!opener) {
+      autoPickFail = 'no-menu';
+      return null;
+    }
     const path = synonymsPath(catNorm);
 
     realClick(opener);
-    if (!(await waitFor(() => visibleMenuItems().length > 0, 5_000))) return null;
+    if (!(await waitFor(() => visibleMenuItems().length > 0, 5_000))) {
+      autoPickFail = 'no-menu';
+      return null;
+    }
 
     const picked = [];
     for (let depth = 0; depth < 5; depth++) {
@@ -211,6 +250,7 @@
       if (!choice && target !== catNorm) choice = bestOption(items, catNorm);
       if (!choice) {
         closeMenu();
+        autoPickFail = 'no-match';
         return null;
       }
       picked.push((choice.textContent || '').trim());
@@ -226,10 +266,12 @@
       }
       if (!outcome) {
         closeMenu();
+        autoPickFail = 'no-menu';
         return null;
       }
     }
     closeMenu();
+    autoPickFail = 'no-match';
     return null;
   }
 
@@ -293,6 +335,10 @@
               label: 'Category',
               manualOnly: true,
               value: () => item.category || null,
+              note: () =>
+                autoPickFail === 'no-match' && item.category
+                  ? `No Anibis category matched “${item.category}” — pick the closest one in the form.`
+                  : null,
             },
           ]),
       {
@@ -322,8 +368,31 @@
     // The detail fields only exist once a category has been chosen in the
     // cascading menu; the fill engine polls this and hints the user.
     formReady: () => Boolean(pv.findControl(TITLE_SPEC)),
-    waitHint:
-      'Choisissez une catégorie — les champs (titre, prix, description) se rempliront automatiquement. / Choose a category and the fields will fill themselves.',
+    // Shown while the fill waits for the category to be picked manually.
+    // Says WHY the auto-pick didn't happen so the fallback never reads as
+    // "the extension did nothing".
+    waitHint: (item) => {
+      if (autoPickFail === 'no-match' && item.category) {
+        return (
+          `Pas de catégorie Anibis correspondant à « ${item.category} » — choisissez-la ` +
+          `manuellement, les champs se rempliront automatiquement ensuite. / ` +
+          `No Anibis category matches “${item.category}” — pick one manually and the ` +
+          `fields will fill automatically right after.`
+        );
+      }
+      if (autoPickFail === 'no-category') {
+        return (
+          `L'objet n'a pas de catégorie dans Peerventory — choisissez-en une manuellement, ` +
+          `les champs se rempliront automatiquement ensuite. / ` +
+          `This item has no category in Peerventory — pick one manually and the fields ` +
+          `will fill automatically right after.`
+        );
+      }
+      return (
+        'Choisissez une catégorie — les champs (titre, prix, description) se rempliront ' +
+        'automatiquement. / Choose a category and the fields will fill themselves.'
+      );
+    },
     // Automated category pick; [] on failure = fall back to the waiting hint.
     prepare: async (item) => {
       const path = await autoPickCategory(item);

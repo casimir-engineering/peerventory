@@ -92,16 +92,33 @@ const CACHED_ITEMS = [
     updatedAt: 1700000500000,
   },
   {
-    // No category: the auto-pick must stand down (manual fallback flow).
+    // Unmappable category: the auto-pick must stand down and the waiting
+    // hint must name the category (manual fallback flow).
     id: 'ItemLamp11',
     docId: DOC_ID,
     description: 'Vintage desk lamp',
+    category: 'Weird stuff',
     tags: [],
     quantity: 2,
     serialIncluded: false,
     photos: [],
     createdAt: 1710000000000,
     updatedAt: 1710000000000,
+  },
+  {
+    // No synonym path segment for the second level: the safe fuzzy pass
+    // (unique whole-word match) must find "Ordinateurs portables".
+    id: 'ItemMac111',
+    docId: DOC_ID,
+    description: 'MacBook Air M1 2020',
+    category: 'ordinateur portable',
+    tags: [],
+    quantity: 1,
+    valueCurrent: { amount: 500, currency: 'CHF' },
+    serialIncluded: false,
+    photos: [],
+    createdAt: 1713000000000,
+    updatedAt: 1713000000000,
   },
   {
     // "Lampe" maps to Maison › Luminaires (two-level auto traversal).
@@ -266,10 +283,10 @@ try {
   );
   await popup.reload();
   await popup.waitForSelector('#view-main:not([hidden])');
-  check('cached items render', (await popup.locator('.item').count()) === 3);
+  check('cached items render', (await popup.locator('.item').count()) === 4);
   check(
     'counts reflect the cache',
-    (await popup.locator('#counts').textContent()).includes('3 items'),
+    (await popup.locator('#counts').textContent()).includes('4 items'),
   );
 
   await popup.fill('#search', 'bosch drill');
@@ -378,19 +395,41 @@ try {
     (await anibis.locator('#photo-count').textContent()) === '0/5 photos',
   );
 
-  /* Manual fallback: no category on the item ----------------------------- */
+  /* Fuzzy second pass: unique word match at the second level ------------- */
+
+  await anibis.reload();
+  await anibis.bringToFront();
+  await popup.evaluate(() => {
+    document.querySelector('[data-item-id="ItemMac111"] [data-sell="anibis"]').click();
+  });
+  await anibis.waitForFunction(
+    () => document.querySelector('input[name="subject"]')?.value,
+    null,
+    { timeout: 20_000 },
+  );
+  check(
+    'fuzzy word match picks the unique second-level option (ordinateur portable)',
+    (await anibis.locator('#category-name').textContent()) ===
+      'Informatique › Ordinateurs portables',
+    await anibis.locator('#category-name').textContent(),
+  );
+
+  /* Manual fallback: unmappable category ---------------------------------- */
 
   await anibis.reload();
   await anibis.bringToFront();
   await popup.evaluate(() => {
     document.querySelector('[data-item-id="ItemLamp11"] [data-sell="anibis"]').click();
   });
-  // No category on the item: the fill must wait with the hint instead of
-  // guessing, and complete once the user picks manually.
+  // "Weird stuff" maps to nothing: the fill must wait with a hint that NAMES
+  // the category (never a silent-looking failure), guess nothing, and
+  // complete once the user picks manually.
   await anibis.waitForSelector('#pv-fill-overlay', { timeout: 10_000 });
+  const hintText = await anibis.locator('#pv-fill-overlay').textContent();
   check(
-    'waiting hint shown when the category cannot be auto-picked',
-    (await anibis.locator('#pv-fill-overlay').textContent()).includes('catégorie'),
+    'waiting hint names the category that did not match',
+    hintText.includes('Weird stuff') && hintText.includes('catégorie'),
+    hintText.slice(0, 120),
   );
   check(
     'no category was guessed',

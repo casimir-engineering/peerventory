@@ -127,11 +127,18 @@ sync.
 | Photos | **auto-attached** (decrypted bytes → `File` → `DataTransfer` on the hidden file input, capped by the "x/5 photos" counter; verified live) | auto-attach via the same mechanism (capped at 10, **not verified against the live site**) |
 | Publish | manual, always | manual, always |
 
+When the Anibis auto-pick finds no confident match, the on-page overlay says
+so explicitly ("No Anibis category matches X — pick one manually…") and the
+fill waits up to 10 minutes for the manual pick before giving up, so the
+fallback never looks like a silent failure. Nothing is ever published — the
+user always reviews the draft and clicks Publish themselves.
+
 **Facebook anti-automation, honestly:** Facebook actively fingerprints
 automation, and account restrictions are a real risk for anything that looks
-scripted. This extension is deliberately manual-assist only: it performs one
-fill on a page you opened (or asked it to open) and are looking at, does not
-click through dropdowns, never submits, and runs no background activity. Use
+scripted. On Facebook this extension is deliberately manual-assist only: it
+performs one fill on a page you opened (or asked it to open) and are looking
+at, does not click through Facebook's dropdowns (the menu traversal is an
+Anibis-only feature), never submits, and runs no background activity. Use
 it as a typing aid, not a bot. If Facebook redesigns the form, fields fall
 back to "manual" in the overlay rather than misfiring.
 
@@ -166,8 +173,10 @@ connector/
     scan.html / scan.js         camera QR scan tab (scan.js generated)
     background.js               empty service worker
     content/fill-core.js        field finder, React-safe setters, overlay,
-                                PV_PING/PV_FILL, pending autofill
-    content/anibis.js           Anibis field map
+                                staged-photo attach, PV_PING/PV_FILL,
+                                pending autofill
+    content/anibis.js           Anibis field map + category auto-pick
+                                (menu scrape, synonyms, safe fuzzy match)
     content/facebook.js         Facebook Marketplace field map
   test/
     unit-tests.mjs              Node: link decode, enc:log decrypt, payload contract
@@ -193,11 +202,14 @@ npm test          # unit + relay integration + Chromium e2e
   `syncInventory` using the read-only token.
 - `test/run-tests.mjs` — real extension in Chromium: QR-image onboarding
   (an actual QR PNG is generated and dropped), camera page smoke test (fake
-  camera), cached search, per-item sell fill on the Anibis fixture, the
-  pending-autofill flow on the React-controlled Facebook fixture, the
-  app-payload paste path and the wrong-page guard.
+  camera), cached search, per-item sell fill on the Anibis fixture with
+  automatic category pick (one- and two-level traversal, fuzzy word match,
+  no-guess fallback) and staged-photo attach, the pending-autofill flow on
+  the React-controlled Facebook fixture (incl. photo attach through React),
+  the app-payload paste path and the wrong-page guard.
 
-**Not covered — needs a live, logged-in manual test:** the real Anibis and
-Facebook form markup (fixtures mirror typical structure only), Facebook's
-rich-text description variant, category/condition pickers, photo drag &
-drop, publishing, and a real webcam scan.
+**Verified live** (logged-in anibis.ch, 2026-08): category auto-pick on the
+real MUI menu, field fill, automatic photo upload. **Not covered — needs a
+live, logged-in manual test:** the real Facebook form markup (the fixture
+mirrors typical structure only), Facebook's rich-text description variant
+and photo input, publishing (never automated), and a real webcam scan.
