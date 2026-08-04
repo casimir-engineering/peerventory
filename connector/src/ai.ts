@@ -137,13 +137,14 @@ export function buildDraftPrompt(
   if (item.serialIncluded) facts.push('Serial number on record (proof of ownership).');
   if (item.notes) facts.push(`Notes: ${item.notes}`);
   return [
-    `Write second-hand classifieds listing copy (Swiss market) in ${LANG_NAMES[lang]}.`,
+    `Write a plain, factual second-hand classifieds listing (Swiss market) in ${LANG_NAMES[lang]}.`,
     ...facts,
+    'Sober tone: no exclamation marks, no marketing adjectives, no hype, no humor.',
     'Reply with STRICT JSON only, no prose, no fences:',
-    `{"title": string (max 60 chars, punchy, ${LANG_NAMES[lang]}),`,
-    ` "description": string (max 500 chars, ${LANG_NAMES[lang]}, warm factual selling copy,`,
-    ' plain text with line breaks, keep all prices/units/measurements exactly as given,',
-    ' no emojis, no invented facts)}',
+    `{"title": string (max 60 chars, ${LANG_NAMES[lang]}: item name + key spec only),`,
+    ` "description": string (max 500 chars, ${LANG_NAMES[lang]}, short factual sentences:`,
+    ' condition, brand/model, specs, what is included; keep all prices/units/measurements',
+    ' exactly as given; plain text with line breaks, no emojis, no invented facts)}',
   ].join('\n');
 }
 

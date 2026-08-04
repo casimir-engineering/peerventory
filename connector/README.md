@@ -144,11 +144,11 @@ sync.
 | Field | Anibis | Facebook Marketplace |
 | --- | --- | --- |
 | Title | autofilled (AI-drafted in the selected language when linked, template otherwise) | autofilled (same) |
-| Description | autofilled (AI-drafted in the selected language when linked; template with localized boilerplate otherwise; FR/DE translation matching page language for app-pasted payloads) | autofilled |
-| Price | autofilled (CHF warning if payload is another currency) | autofilled (number only; account currency assumed) |
+| Description | autofilled (AI-drafted in the selected language when linked; template with localized boilerplate otherwise; FR/DE translation matching page language for app-pasted payloads) | autofilled — the collapsed **"More details"** section that hides the field is expanded automatically (verified live 2026-08) |
+| Price | autofilled (CHF warning if payload is another currency) | autofilled (number only; account currency assumed; verified live) |
 | Condition | autofilled when it is a native `<select>`; otherwise manual hint | manual hint (custom combobox) |
 | Category | **auto-picked**: with an AI linked, each scraped menu level is decided by the model (overrides the heuristic); otherwise/on failure the cascading MUI menu is matched against the item's category (accent-insensitive + synonyms table in `content/anibis.js`); falls back to the manual hint when nothing matches confidently | manual hint (custom combobox) |
-| Photos | **auto-attached** (decrypted bytes → `File` → `DataTransfer` on the hidden file input, capped by the "x/5 photos" counter; verified live) | auto-attach via the same mechanism (capped at 10, **not verified against the live site**) |
+| Photos | **auto-attached** (decrypted bytes → `File` → `DataTransfer` on the hidden file input, capped by the "x/5 photos" counter; verified live) | auto-attached via the same mechanism (capped at 10; verified live 2026-08) |
 | Publish | manual, always | manual, always |
 
 When the Anibis auto-pick finds no confident match, the on-page overlay says
@@ -162,8 +162,10 @@ automation, and account restrictions are a real risk for anything that looks
 scripted. On Facebook this extension is deliberately manual-assist only: it
 performs one fill on a page you opened (or asked it to open) and are looking
 at, does not click through Facebook's dropdowns (the menu traversal is an
-Anibis-only feature), never submits, and runs no background activity. Use
-it as a typing aid, not a bot. If Facebook redesigns the form, fields fall
+Anibis-only feature; the single click that expands the "More details"
+section to reach the description field is the only UI interaction), never
+submits, and runs no background activity. Use it as a typing aid, not a
+bot. If Facebook redesigns the form, fields fall
 back to "manual" in the overlay rather than misfiring.
 
 Both sites change their markup regularly. Field lookups are resilient
@@ -240,8 +242,11 @@ npm test          # unit + relay integration + Chromium e2e
   templates, and the AI-assisted fill (api.anthropic.com is host-mapped to a
   local mock — the real popup/background fetch paths run, no real API call).
 
-**Verified live** (logged-in anibis.ch, 2026-08): category auto-pick on the
-real MUI menu, field fill, automatic photo upload. **Not covered — needs a
-live, logged-in manual test:** the real Facebook form markup (the fixture
-mirrors typical structure only), Facebook's rich-text description variant
-and photo input, publishing (never automated), and a real webcam scan.
+**Verified live** (2026-08): on logged-in anibis.ch — category auto-pick on
+the real MUI menu (heuristic and AI), field fill, automatic photo upload,
+AI-drafted FR copy; on logged-in facebook.com/marketplace/create/item —
+title/price fill (label-wrapped inputs), the "More details" expansion +
+description fill, and the DataTransfer photo attach (2/10 counter observed).
+Category ("Catégorie") and condition ("État") stay manual dropdowns on
+Facebook, as designed. **Not covered — needs a live manual test:**
+publishing (never automated) and a real webcam scan.

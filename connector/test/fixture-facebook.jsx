@@ -20,6 +20,10 @@ function CreateListing() {
   const [price, setPrice] = useState('');
   const [description, setDescription] = useState('');
   const [photos, setPhotos] = useState(0);
+  // Live 2026-08: the Description textarea only MOUNTS after the collapsed
+  // "More details" disclosure is expanded; the fixture mirrors that so the
+  // e2e covers the expand-then-fill path in content/facebook.js prepare().
+  const [moreOpen, setMoreOpen] = useState(false);
 
   return (
     <div style={{ maxWidth: 560, margin: '40px auto', fontFamily: 'sans-serif' }}>
@@ -48,16 +52,27 @@ function CreateListing() {
       <div role="combobox" aria-label="Condition" tabIndex={0} style={{ margin: '14px 0' }}>
         Condition ▾
       </div>
-      <label style={{ display: 'block', margin: '14px 0' }}>
-        <span>Description</span>
-        <textarea
-          aria-label="Description"
-          rows={6}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          style={{ width: '100%' }}
-        />
-      </label>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setMoreOpen(true)}
+        style={{ margin: '14px 0', cursor: 'pointer' }}
+      >
+        More details
+        <div style={{ fontSize: 12, color: '#888' }}>Attract more interest by adding details.</div>
+      </div>
+      {moreOpen && (
+        <label style={{ display: 'block', margin: '14px 0' }}>
+          <span>Description</span>
+          <textarea
+            aria-label="Description"
+            rows={6}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            style={{ width: '100%' }}
+          />
+        </label>
+      )}
       <p>
         Photos: <em>drag photos here</em>
       </p>

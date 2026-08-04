@@ -308,6 +308,11 @@ await test('draftListing: tiny anthropic request, language + facts in prompt, fe
   assert.ok(prompt.includes('Bosch GSR 18V'), 'brand fact in the prompt');
   assert.ok(prompt.includes('Asking price: 125 CHF'), 'price fact in the prompt');
   assert.ok(!prompt.includes('SN-SECRET'), 'serial number never reaches the AI');
+  assert.ok(
+    prompt.includes('no exclamation marks, no marketing adjectives') &&
+      prompt.includes('factual'),
+    'sober classifieds tone is pinned in the prompt',
+  );
 });
 
 await test('draftListing throws on HTTP error / bad JSON (caller keeps the template)', async () => {
