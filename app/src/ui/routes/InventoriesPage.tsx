@@ -1,14 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import * as services from '../../services';
 import { getDeviceId, snapshotInventory, useInventories } from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
-import type { InventoryHandle, InventorySnapshot } from '../../types';
-import { formatAmount } from '../lib/format';
+import type { Id, InventoryHandle, InventorySnapshot, Item } from '../../types';
+import { formatAmount, formatMoney } from '../lib/format';
 import { AppHeader } from '../components/AppHeader';
 import { EmptyState, SectionTitle } from '../components/Common';
+import { PhotoImage } from '../components/Photos';
 import { Field, Toggle, useCurrencyComboOptions } from '../components/Fields';
 import { SmartCombo } from '../components/SmartCombo';
 import { ImportModal } from '../components/ImportModal';
@@ -56,6 +57,148 @@ function rememberNameWelcomeDismissal() {
   }
 }
 
+/* ---------------- cross-inventory item search ---------------- */
+
+const SEARCH_DEBOUNCE_MS = 150;
+const MAX_SEARCH_RESULTS = 50;
+
+interface SearchableInventory {
+  docId: Id;
+  inventoryName: string;
+  currency: string;
+  items: Item[];
+}
+
+interface SearchResult {
+  docId: Id;
+  inventoryName: string;
+  item: Item;
+  /** Lower ranks sort first (0 = name match). */
+  rank: number;
+}
+
+/** ~150ms trailing debounce so search keeps up with typing without thrashing. */
+function useDebounced<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delayMs);
+    return () => clearTimeout(t);
+  }, [value, delayMs]);
+  return debounced;
+}
+
+/**
+ * Local snapshots of every inventory on this device, loaded lazily the first
+ * time the search is used. snapshotInventory only waits for IndexedDB
+ * persistence — it never blocks on the network (same mechanism the per-row
+ * stats below use).
+ */
+function useSearchableInventories(active: boolean, handles: InventoryHandle[]): {
+  inventories: SearchableInventory[];
+  loading: boolean;
+} {
+  const [inventories, setInventories] = useState<SearchableInventory[] | null>(null);
+  // Reload when the set of inventories or their sync state changes.
+  const handlesKey = handles.map((h) => `${h.docId}:${h.lastSyncedAt ?? 0}`).join(',');
+
+  useEffect(() => {
+    if (!active) return;
+    let alive = true;
+    void Promise.all(
+      handles.map(async (handle): Promise<SearchableInventory | null> => {
+        try {
+          const snap = await snapshotInventory(handle.docId);
+          return {
+            docId: handle.docId,
+            inventoryName: snap.meta.name || handle.name || 'Untitled inventory',
+            currency: snap.meta.currency || 'USD',
+            items: snap.items,
+          };
+        } catch {
+          return null; // e.g. missing encryption key; skip this inventory
+        }
+      }),
+    ).then((loaded) => {
+      if (alive) setInventories(loaded.filter((s): s is SearchableInventory => s !== null));
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, handlesKey]);
+
+  return { inventories: inventories ?? [], loading: active && inventories === null };
+}
+
+function lastLocationLabel(item: Item): string | undefined {
+  const history = item.locationHistory ?? [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    const label = history[i]?.label?.trim();
+    if (label) return label;
+  }
+  return undefined;
+}
+
+/**
+ * Case-insensitive substring match over name/description, brand/model,
+ * category, serial number, condition and location label. Every whitespace-
+ * separated word must match; items whose NAME matches rank first.
+ */
+function searchAllInventories(inventories: SearchableInventory[], query: string): SearchResult[] {
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  const results: SearchResult[] = [];
+  for (const inv of inventories) {
+    for (const item of inv.items) {
+      const name = (item.description || '').toLowerCase();
+      const rest = [
+        item.brandModel,
+        item.category,
+        item.serialNumber,
+        item.condition,
+        lastLocationLabel(item),
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      if (!words.every((w) => name.includes(w) || rest.includes(w))) continue;
+      results.push({
+        docId: inv.docId,
+        inventoryName: inv.inventoryName,
+        item,
+        rank: words.every((w) => name.includes(w)) ? 0 : 1,
+      });
+    }
+  }
+  results.sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      (a.item.description || '').localeCompare(b.item.description || ''),
+  );
+  return results.slice(0, MAX_SEARCH_RESULTS);
+}
+
+function SearchResultRow({ result }: { result: SearchResult }) {
+  const { docId, inventoryName, item } = result;
+  const cover = item.photos?.[0]?.hash ?? null;
+  const location = lastLocationLabel(item);
+  const detail = [inventoryName, item.valueCurrent ? formatMoney(item.valueCurrent) : null, location]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <Link className="list-row" to={`/inv/${docId}/i/${item.id}`}>
+      <PhotoImage docId={docId} hash={cover} alt="" className="thumb sm" />
+      <div className="grow">
+        <div style={{ fontWeight: 600 }}>{item.description || 'Untitled item'}</div>
+        <div className="tiny faint">{detail}</div>
+      </div>
+      <span className="muted" aria-hidden="true">
+        ›
+      </span>
+    </Link>
+  );
+}
+
 export function InventoriesPage() {
   const navigate = useNavigate();
   const { toast, toastError } = useToast();
@@ -77,6 +220,20 @@ export function InventoriesPage() {
   const [dragActive, setDragActive] = useState(false);
   const dragDepth = useRef(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const debouncedQuery = useDebounced(searchQuery, SEARCH_DEBOUNCE_MS);
+  const searching = debouncedQuery.trim().length > 0;
+  // Snapshots load on the first keystroke and stay warm afterwards.
+  const [searchTouched, setSearchTouched] = useState(false);
+  const { inventories: searchable, loading: searchLoading } = useSearchableInventories(
+    searchTouched,
+    handles,
+  );
+  const searchResults = useMemo(
+    () => (searching ? searchAllInventories(searchable, debouncedQuery) : []),
+    [searching, searchable, debouncedQuery],
+  );
 
   /** One entry point for anything scanned, pasted, or decoded from an image. */
   const handleScannedText = useCallback(
@@ -259,6 +416,32 @@ export function InventoriesPage() {
             />
           </section>
 
+          {handles.length > 0 ? (
+            <div className="search">
+              <input
+                className="input"
+                type="search"
+                value={searchQuery}
+                placeholder="Search items in all inventories"
+                aria-label="Search items in all inventories"
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  if (e.target.value.trim()) setSearchTouched(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    e.preventDefault();
+                    setSearchQuery('');
+                  } else if (e.key === 'Enter' && searchResults.length > 0) {
+                    e.preventDefault();
+                    const first = searchResults[0];
+                    navigate(`/inv/${first.docId}/i/${first.item.id}`);
+                  }
+                }}
+              />
+            </div>
+          ) : null}
+
           {handles.length === 0 ? (
             <EmptyState
               glyph="▤"
@@ -270,6 +453,35 @@ export function InventoriesPage() {
                 </button>
               }
             />
+          ) : searching ? (
+            searchLoading ? (
+              <p className="small muted">Searching…</p>
+            ) : searchResults.length === 0 ? (
+              <EmptyState
+                title="No matching items"
+                body="No item in any inventory on this device matches this search."
+                action={
+                  <button type="button" className="btn" onClick={() => setSearchQuery('')}>
+                    Clear search
+                  </button>
+                }
+              />
+            ) : (
+              <>
+                <SectionTitle>
+                  {searchResults.length === MAX_SEARCH_RESULTS
+                    ? `First ${MAX_SEARCH_RESULTS} matching items`
+                    : `${searchResults.length} matching item${searchResults.length === 1 ? '' : 's'}`}
+                </SectionTitle>
+                <div className="card flush">
+                  <div className="list-rows">
+                    {searchResults.map((result) => (
+                      <SearchResultRow key={`${result.docId}:${result.item.id}`} result={result} />
+                    ))}
+                  </div>
+                </div>
+              </>
+            )
           ) : (
             <>
             <SectionTitle>On this device</SectionTitle>

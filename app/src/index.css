@@ -700,6 +700,11 @@ hr {
   height: 92px;
 }
 
+.thumb.sm {
+  width: 44px;
+  height: 44px;
+}
+
 .thumb-empty {
   display: flex;
   align-items: center;
