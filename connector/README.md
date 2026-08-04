@@ -45,9 +45,12 @@ Peerventory app                     Connector extension
 - **Photos** — thumbnails are fetched from the blob API
   (`GET <origin>/api/blobs/<docId>/<hash>`, `x-token` header; the server
   already serves `Access-Control-Allow-Origin: *`), decrypted locally and
-  cached in the extension's IndexedDB. Each item also has a **Photos** button
-  that downloads the decrypted photos as files — extensions cannot attach
-  files to a form, so you drag them in yourself.
+  cached in the extension's IndexedDB. On **Sell**, the decrypted photos are
+  staged as base64 in `chrome.storage.local` (`pv:photos`) and the content
+  script attaches them to the form's `<input type="file">` via `DataTransfer`
+  — no dragging needed. The per-item **Photos** button still downloads the
+  files as a manual fallback. Stagings expire after 10 minutes and are
+  replaced on every Sell click, so another item's photos never attach.
 - **Sell on X** — each result row has *Sell on Anibis* and *Sell on
   Facebook*. If the active tab is that marketplace (detected by pinging the
   content script — no `tabs` permission needed), the listing form is filled
@@ -102,7 +105,7 @@ sync.
     "priceAmount": 120,          // number; 0 = no price set
     "priceCurrency": "CHF",      // ISO 4217
     "condition": "string?",
-    "category": "string?",       // hint only — pickers stay manual
+    "category": "string?",       // free text; drives the Anibis auto-pick, hint elsewhere
     "brandModel": "string?",
     "weightGrams": 254,          // optional, only when measured exactly
     "dimensionsMm": { "l": 1, "w": 1, "h": 1 },  // optional, only when measured
@@ -120,8 +123,8 @@ sync.
 | Description | autofilled (FR/DE translation matching page language, when present) | autofilled |
 | Price | autofilled (CHF warning if payload is another currency) | autofilled (number only; account currency assumed) |
 | Condition | autofilled when it is a native `<select>`; otherwise manual hint | manual hint (custom combobox) |
-| Category | manual hint (multi-step picker dialog) | manual hint (custom combobox) |
-| Photos | manual drag & drop of downloaded files | manual drag & drop |
+| Category | **auto-picked**: the cascading MUI menu is scraped level by level and matched against the item's category (accent-insensitive + synonyms table in `content/anibis.js`); falls back to the manual hint when no option matches confidently | manual hint (custom combobox) |
+| Photos | **auto-attached** (decrypted bytes → `File` → `DataTransfer` on the hidden file input, capped by the "x/5 photos" counter; verified live) | auto-attach via the same mechanism (capped at 10, **not verified against the live site**) |
 | Publish | manual, always | manual, always |
 
 **Facebook anti-automation, honestly:** Facebook actively fingerprints

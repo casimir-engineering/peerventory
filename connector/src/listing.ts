@@ -79,7 +79,7 @@ export function buildListingPayload(item: ExtItem): ListingPayload {
     item: payloadItem,
     photosNote:
       item.photos.length > 0
-        ? `${item.photos.length} photo(s) — use "Photos" on the item in the popup to download them, then drag the files into the form.`
+        ? `${item.photos.length} photo(s) — they attach automatically; if they don't appear, use "Photos" on the item in the popup and drag the files in.`
         : 'No photos on this item.',
   };
 }

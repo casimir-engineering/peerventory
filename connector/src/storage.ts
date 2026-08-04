@@ -5,7 +5,7 @@
  * extension's own IndexedDB (blobs can't live in chrome.storage).
  */
 
-import type { CacheMap, CachedInventory, ListingPayload, Profile } from './types';
+import type { CacheMap, CachedInventory, ListingPayload, Profile, StagedPhotos } from './types';
 
 export const PROFILE_KEY = 'pv:profile';
 export const CACHE_KEY = 'pv:cache';
@@ -13,6 +13,8 @@ export const CACHE_KEY = 'pv:cache';
 export const PAYLOAD_KEY = 'pv:payload';
 /** One-shot autofill request for a tab the popup just opened. */
 export const PENDING_KEY = 'pv:pending';
+/** Decrypted photos (base64) staged for the content scripts to attach. */
+export const PHOTOS_KEY = 'pv:photos';
 
 export async function getProfile(): Promise<Profile | null> {
   const data = await chrome.storage.local.get(PROFILE_KEY);
@@ -42,9 +44,15 @@ export async function setPendingFill(site: 'anibis' | 'facebook'): Promise<void>
   await chrome.storage.local.set({ [PENDING_KEY]: { site, at: Date.now() } });
 }
 
-/** Forget everything: profile, caches, payload, photo thumbnails. */
+/** null clears the staging (photos of a previous item must never linger). */
+export async function setStagedPhotos(staged: StagedPhotos | null): Promise<void> {
+  if (staged) await chrome.storage.local.set({ [PHOTOS_KEY]: staged });
+  else await chrome.storage.local.remove(PHOTOS_KEY);
+}
+
+/** Forget everything: profile, caches, payload, staged photos, thumbnails. */
 export async function clearAll(): Promise<void> {
-  await chrome.storage.local.remove([PROFILE_KEY, CACHE_KEY, PAYLOAD_KEY, PENDING_KEY]);
+  await chrome.storage.local.remove([PROFILE_KEY, CACHE_KEY, PAYLOAD_KEY, PENDING_KEY, PHOTOS_KEY]);
   await new Promise<void>((resolve) => {
     const req = indexedDB.deleteDatabase(PHOTO_DB);
     req.onsuccess = req.onerror = req.onblocked = () => resolve();

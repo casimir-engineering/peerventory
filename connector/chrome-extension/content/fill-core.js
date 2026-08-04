@@ -20,6 +20,8 @@
   if (window.__pv) return; // already injected (SPA re-injection guard)
 
   const PAYLOAD_KEY = 'pv:payload';
+  /** Decrypted photos staged by the popup (base64) for automatic attachment. */
+  const PHOTOS_KEY = 'pv:photos';
 
   /* ---------------------------------------------------------------- */
   /* Element discovery                                                  */
@@ -230,6 +232,96 @@
   }
 
   /* ---------------------------------------------------------------- */
+  /* Photo attachment                                                   */
+  /* ---------------------------------------------------------------- */
+
+  /** Staged photos older than this are ignored (a stale "Sell" click must
+   * never attach the wrong item's photos to a later listing). */
+  const PHOTOS_MAX_AGE_MS = 10 * 60 * 1000;
+
+  function b64ToFile(photo, index) {
+    const bin = atob(photo.b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new File([bytes], photo.name || `photo-${index + 1}.jpg`, {
+      type: photo.type || 'image/jpeg',
+    });
+  }
+
+  /** File inputs are almost always visually hidden behind a styled dropzone,
+   * so unlike findControl this does NOT require visibility. */
+  function defaultPhotoInput() {
+    return (
+      document.querySelector('input[type="file"][accept*="image"]') ||
+      document.querySelector('input[type="file"]')
+    );
+  }
+
+  /**
+   * Attach the photos the popup staged in chrome.storage.local to the form's
+   * file input (or, failing that, drop them on site.dropZone()). Returns a
+   * result row for the overlay, or null when nothing is staged.
+   */
+  async function attachStagedPhotos(site) {
+    let staged;
+    try {
+      staged = (await chrome.storage.local.get(PHOTOS_KEY))[PHOTOS_KEY];
+    } catch {
+      return null;
+    }
+    if (!staged || !Array.isArray(staged.photos) || staged.photos.length === 0) return null;
+    if (typeof staged.at !== 'number' || Date.now() - staged.at > PHOTOS_MAX_AGE_MS) return null;
+    const row = (status, note) => ({
+      key: 'photos',
+      label: `Photos (${staged.photos.length})`,
+      status,
+      value: `${staged.photos.length} photo(s)`,
+      note: note || null,
+    });
+    // Re-running the fill (second popup click, pending retry) must not upload
+    // the same photos twice.
+    if (window.__pvPhotosAttachedAt === staged.at) {
+      return row('filled', 'Already attached on this page.');
+    }
+    // SPA pages render the upload area late; poll briefly before giving up.
+    const findInput = site.photoInput || defaultPhotoInput;
+    let input = findInput();
+    for (const deadline = Date.now() + 8000; !input && Date.now() < deadline; input = findInput()) {
+      await new Promise((r) => setTimeout(r, 300));
+    }
+    const dt = new DataTransfer();
+    const max = site.maxPhotos ? site.maxPhotos() : Infinity;
+    if (max <= 0) return row('manual', 'The photo area is full — remove a photo or attach by hand.');
+    const use = staged.photos.slice(0, max);
+    use.forEach((p, i) => dt.items.add(b64ToFile(p, i)));
+
+    if (input && !input.disabled) {
+      input.files = dt.files;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      const zone = site.dropZone ? site.dropZone() : null;
+      if (!zone) {
+        return row(
+          'notfound',
+          'No photo upload field found — use "Photos" in the popup and drag the files in.',
+        );
+      }
+      for (const type of ['dragenter', 'dragover', 'drop']) {
+        zone.dispatchEvent(
+          new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt }),
+        );
+      }
+    }
+    window.__pvPhotosAttachedAt = staged.at;
+    const cut = staged.photos.length - use.length;
+    return row(
+      'filled',
+      cut > 0 ? `Only ${use.length} attached — the form takes ${max} more photo(s) max.` : null,
+    );
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Status overlay                                                     */
   /* ---------------------------------------------------------------- */
 
@@ -277,13 +369,21 @@
       )
       .join('');
 
+    // The photos line: covered by its own result row when the fill attached
+    // (or tried to attach) staged photos; otherwise fall back to the payload's
+    // manual instructions.
+    const photosRow = results.find((r) => r.key === 'photos');
+    const footer = photosRow
+      ? ''
+      : `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a3a3c;color:#d1d1d6">` +
+        `📷 ${esc(payload.photosNote || 'Drag the downloaded photos into the photo area of the form.')}</div>`;
+
     box.innerHTML =
       `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">` +
       `<b>Peerventory → ${esc(siteLabel)}</b>` +
       `<button id="pv-overlay-close" style="all:unset;cursor:pointer;color:#8e8e93;font-size:16px;padding:2px 6px">✕</button></div>` +
       rows +
-      `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a3a3c;color:#d1d1d6">` +
-      `📷 ${esc(payload.photosNote || 'Drag the downloaded photos into the photo area of the form.')}</div>`;
+      footer;
 
     document.documentElement.appendChild(box);
     box.querySelector('#pv-overlay-close').addEventListener('click', () => box.remove());
@@ -336,6 +436,32 @@
     if (!validPayload(payload)) {
       return { ok: false, error: 'no-payload', site: site.label };
     }
+    // Site-specific automated preparation (e.g. Anibis: click through the
+    // category menu). Returns result rows for the overlay; on failure it
+    // returns [] and the manual flow below (waiting hint) takes over.
+    let prepRows = [];
+    if (site.prepare) {
+      try {
+        prepRows = (await site.prepare(payload.item)) || [];
+      } catch {
+        prepRows = [];
+      }
+    }
+    // Photos attach before the formReady wait: the upload area may exist
+    // before the category-gated fields do (it does on Anibis), and uploading
+    // can proceed while the user picks a category manually.
+    let photosRow = null;
+    try {
+      photosRow = await attachStagedPhotos(site);
+    } catch (err) {
+      photosRow = {
+        key: 'photos',
+        label: 'Photos',
+        status: 'notfound',
+        value: '',
+        note: `Attach failed (${err}) — use "Photos" in the popup instead.`,
+      };
+    }
     if (site.formReady && !site.formReady()) {
       showWaitingHint(site.label, site.waitHint || 'Waiting for the listing form to appear…');
       const deadline = Date.now() + FORM_READY_TIMEOUT_MS;
@@ -345,7 +471,8 @@
       // On timeout, fall through: the fields report "not found" honestly.
     }
     try {
-      const results = fillFields(site.buildFields(payload.item), payload.item);
+      const results = [...prepRows, ...fillFields(site.buildFields(payload.item), payload.item)];
+      if (photosRow) results.push(photosRow);
       showOverlay(site.label, results, payload);
       return { ok: true, site: site.label, results };
     } catch (err) {
@@ -386,7 +513,12 @@
    *   isListingPage() -> bool,
    *   buildFields(payloadItem) -> fields,
    *   formReady?() -> bool,   // fields exist (a manual step may gate them)
-   *   waitHint?: string       // shown while waiting for formReady()
+   *   waitHint?: string,      // shown while waiting for formReady()
+   *   prepare?(payloadItem) -> Promise<resultRows>, // automated pre-step
+   *                           // (e.g. Anibis category menu); [] = do it manually
+   *   photoInput?() -> input[type=file] | null,  // where staged photos go
+   *   maxPhotos?() -> number, // photos the form still accepts
+   *   dropZone?() -> Element | null  // fallback drop target if no input
    * }
    * Wires the popup's PV_FILL message (and the pending-autofill flag) to the
    * fill run for this site.
@@ -412,10 +544,12 @@
     setNativeValue,
     fillControl,
     fillFields,
+    attachStagedPhotos,
     showOverlay,
     initSite,
     runFill,
     validPayload,
     PAYLOAD_KEY,
+    PHOTOS_KEY,
   };
 })();

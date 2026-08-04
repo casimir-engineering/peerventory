@@ -9,7 +9,19 @@
  * shipping, price, title=name "subject", description=name "body") only after
  * a category is picked in a cascading menu — hence formReady(): the fill
  * engine waits for the title field and shows a "choose a category" hint
- * until then. The category itself stays manual.
+ * until then.
+ *
+ * The category menu itself is automated in prepare(): the available options
+ * are scraped from the live DOM level by level (li[role="menuitem"], the
+ * submenu replaces the list in place with a leading "Retour" row, verified
+ * live 2026-08) and matched against the item's free-text category using
+ * accent-insensitive tokens plus the CATEGORY_SYNONYMS table below. When no
+ * option matches confidently, the menu is closed again and the manual flow
+ * (waiting hint) takes over — a wrong category is worse than no category.
+ *
+ * Photos: the upload area exists before a category is picked; it is a hidden
+ * <input type="file" aria-label="Photos" multiple accept="image/...">. The
+ * "0/5 photos" counter in the page text tells us how many more it accepts.
  *
  * When Anibis redesigns the form, update the regexes/selectors below — the
  * strategies are tried in order (selectors, aria, placeholder, label, name).
@@ -28,6 +40,197 @@
     if (lang.startsWith('de') && tr.de) return tr.de;
     if (lang.startsWith('fr') && tr.fr) return tr.fr;
     return item.description || null;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Category auto-pick                                                 */
+  /* ---------------------------------------------------------------- */
+
+  /** Lowercase, strip accents, collapse punctuation ("Déco & Accessoires" -> "deco accessoires"). */
+  function norm(s) {
+    return String(s || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  /**
+   * Free-text app categories (EN/FR/DE) -> Anibis category path. Each path
+   * segment is fuzzy-matched (normalized containment) against the scraped
+   * menu labels of that level, so a site rename like "Jardin & Outils" ->
+   * "Jardin, Outils & Machines" keeps working. First matching entry wins.
+   * Keys match whole tokens of the item's category (plural-insensitive).
+   */
+  const CATEGORY_SYNONYMS = [
+    { keys: ['lighting', 'light', 'lamp', 'lampe', 'luminaire', 'leuchte', 'lustre'], path: ['maison', 'luminaires'] },
+    { keys: ['furniture', 'meuble', 'mobilier', 'moebel', 'mobel', 'sofa', 'canape', 'armoire', 'table', 'chaise'], path: ['maison', 'mobilier'] },
+    { keys: ['appliance', 'electromenager', 'kitchen', 'cuisine', 'ustensile'], path: ['maison', 'electromenager'] },
+    { keys: ['deco', 'decor', 'decoration', 'dekoration'], path: ['maison', 'deco'] },
+    { keys: ['electronic', 'electronique', 'elektronik', 'informatique', 'computer', 'ordinateur', 'laptop', 'notebook', 'pc', 'tablet', 'tablette', 'imprimante', 'printer', 'ecran', 'monitor'], path: ['informatique'] },
+    { keys: ['phone', 'telephone', 'telephonie', 'smartphone', 'iphone', 'natel', 'handy', 'gps', 'navigation'], path: ['telephonie'] },
+    { keys: ['tv', 'television', 'audio', 'hifi', 'speaker', 'enceinte', 'casque', 'headphone', 'ampli'], path: ['tv audio'] },
+    { keys: ['photo', 'camera', 'video', 'objectif', 'drone'], path: ['photo video'] },
+    { keys: ['tool', 'outil', 'outillage', 'werkzeug', 'garden', 'jardin', 'garten', 'perceuse', 'drill', 'tondeuse'], path: ['jardin outils'] },
+    { keys: ['toy', 'jouet', 'spielzeug', 'lego', 'playmobil', 'puzzle', 'modelisme'], path: ['jouets'] },
+    { keys: ['book', 'livre', 'buch', 'bd', 'comic', 'manga'], path: ['livres'] },
+    { keys: ['music', 'musique', 'musik', 'instrument', 'guitare', 'guitar', 'piano', 'vinyle', 'vinyl'], path: ['musique'] },
+    { keys: ['sport', 'outdoor', 'fitness', 'velo', 'bike', 'fahrrad', 'ski', 'camping', 'randonnee'], path: ['sport'] },
+    { keys: ['clothing', 'clothes', 'vetement', 'kleider', 'fashion', 'shoe', 'chaussure', 'schuhe', 'sac', 'bag', 'montre', 'watch', 'uhr', 'bijou', 'jewelry'], path: ['vetements'] },
+    { keys: ['baby', 'bebe', 'enfant', 'kind', 'kid', 'poussette'], path: ['bebe enfant'] },
+    { keys: ['animal', 'animaux', 'pet', 'tier', 'chien', 'dog', 'hund', 'chat', 'katze', 'aquarium'], path: ['animaux'] },
+    { keys: ['car', 'auto', 'voiture', 'vehicule', 'moto', 'scooter', 'pneu', 'tire'], path: ['vehicules'] },
+    { keys: ['art', 'antique', 'antiquite', 'antiquitat', 'tableau', 'painting', 'sculpture'], path: ['art antiquites'] },
+    { keys: ['collection', 'collectible', 'sammeln', 'timbre', 'stamp', 'piece', 'coin'], path: ['objets de collection'] },
+    { keys: ['office', 'bureau', 'buro', 'commerce'], path: ['bureau commerce'] },
+    { keys: ['film', 'movie', 'dvd', 'bluray'], path: ['films'] },
+    { keys: ['ticket', 'billet', 'bon', 'voucher', 'gutschein'], path: ['billetterie'] },
+  ];
+
+  /** Whole-token match, tolerant of trailing plural "s" ("lamps" ~ "lamp"). */
+  function tokenMatches(token, key) {
+    return token === key || token === `${key}s` || `${token}s` === key;
+  }
+
+  function synonymsPath(catNorm) {
+    const tokens = catNorm.split(' ');
+    for (const entry of CATEGORY_SYNONYMS) {
+      if (entry.keys.some((k) => tokens.some((t) => tokenMatches(t, k)))) return entry.path;
+    }
+    return null;
+  }
+
+  /** 3 = exact, 2 = one label contains the other. Below 2 is "not confident". */
+  function matchScore(labelNorm, targetNorm) {
+    if (!labelNorm || !targetNorm) return 0;
+    if (labelNorm === targetNorm) return 3;
+    if (labelNorm.includes(targetNorm) || targetNorm.includes(labelNorm)) return 2;
+    return 0;
+  }
+
+  const BACK_RE = /^(retour|zuruck|indietro|back)$/;
+
+  /** MUI keeps closed menus mounted with visibility:hidden (which still has
+   * geometry), so checkVisibility — not getBoundingClientRect — is required
+   * to tell a really-open menu from a stale closed one (verified live). */
+  function visibleMenuItems() {
+    return [...document.querySelectorAll('li[role="menuitem"]')].filter((li) =>
+      typeof li.checkVisibility === 'function'
+        ? li.checkVisibility({ visibilityProperty: true, opacityProperty: true })
+        : li.getBoundingClientRect().width > 0,
+    );
+  }
+
+  function menuSignature(items) {
+    return items.map((li) => norm(li.textContent)).join('|');
+  }
+
+  function bestOption(items, targetNorm) {
+    let best = null;
+    let bestScore = 0;
+    for (const li of items) {
+      const label = norm(li.textContent);
+      if (BACK_RE.test(label)) continue;
+      const s = matchScore(label, targetNorm);
+      if (s > bestScore) {
+        best = li;
+        bestScore = s;
+      }
+    }
+    return bestScore >= 2 ? best : null;
+  }
+
+  /** MUI menus listen for real mouse events; .click() alone also works but
+   * mousedown/up first is closer to a human interaction. */
+  function realClick(el) {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new MouseEvent('mousedown', opts));
+    el.dispatchEvent(new MouseEvent('mouseup', opts));
+    el.click();
+  }
+
+  function categoryOpener() {
+    return (
+      [...document.querySelectorAll('button')].find((b) =>
+        /choisir une cat|kategorie|scegli.*categor|choose.*categor/i.test(b.textContent || ''),
+      ) || null
+    );
+  }
+
+  function closeMenu() {
+    const items = visibleMenuItems();
+    if (items.length === 0) return;
+    items[0].dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+    const backdrop = document.querySelector('.MuiBackdrop-root');
+    if (backdrop) backdrop.click();
+  }
+
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function waitFor(cond, timeoutMs, stepMs = 200) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const v = cond();
+      if (v) return v;
+      await sleep(stepMs);
+    }
+    return null;
+  }
+
+  /** The category path picked by prepare(); makes buildFields skip the manual
+   * category hint. */
+  let autoPickedPath = null;
+
+  /**
+   * Click through the cascading category menu, matching each level's scraped
+   * options against the synonyms path (or the raw category text). Returns the
+   * human-readable path on success, null when unsure (menu closed again).
+   */
+  async function autoPickCategory(item) {
+    const catNorm = norm(item.category);
+    if (!catNorm) return null;
+    // The SPA may still be rendering when the fill starts (pending flow).
+    const opener = await waitFor(() => site.formReady() || categoryOpener(), 10_000, 300);
+    if (!opener || site.formReady()) return null; // already picked / no picker
+    const path = synonymsPath(catNorm);
+
+    realClick(opener);
+    if (!(await waitFor(() => visibleMenuItems().length > 0, 5_000))) return null;
+
+    const picked = [];
+    for (let depth = 0; depth < 5; depth++) {
+      const items = visibleMenuItems();
+      const beforeSig = menuSignature(items);
+      // Segment of the synonyms path for this level, else the raw category
+      // text (covers items whose category literally names an Anibis option).
+      const target = path && depth < path.length ? path[depth] : catNorm;
+      let choice = bestOption(items, target);
+      if (!choice && target !== catNorm) choice = bestOption(items, catNorm);
+      if (!choice) {
+        closeMenu();
+        return null;
+      }
+      picked.push((choice.textContent || '').trim());
+      realClick(choice);
+      const outcome = await waitFor(() => {
+        if (site.formReady()) return 'done';
+        const now = visibleMenuItems();
+        return now.length > 0 && menuSignature(now) !== beforeSig ? 'descended' : null;
+      }, 6_000);
+      if (outcome === 'done') {
+        autoPickedPath = picked.join(' › ');
+        return autoPickedPath;
+      }
+      if (!outcome) {
+        closeMenu();
+        return null;
+      }
+    }
+    closeMenu();
+    return null;
   }
 
   // Live form 2026-08: title is <input name="subject"> (label "Titre *").
@@ -79,14 +282,19 @@
             ? `Price is in ${item.priceCurrency} — Anibis lists in CHF, convert before publishing.`
             : null,
       },
-      {
-        // The Anibis category picker is a multi-step dialog, not a plain
-        // control — automating it would break on every redesign.
-        key: 'category',
-        label: 'Category',
-        manualOnly: true,
-        value: () => item.category || null,
-      },
+      // Category: auto-picked in prepare() when the item's category maps
+      // confidently onto the menu (that run adds its own overlay row); the
+      // manual hint below only appears when the auto-pick stood down.
+      ...(autoPickedPath
+        ? []
+        : [
+            {
+              key: 'category',
+              label: 'Category',
+              manualOnly: true,
+              value: () => item.category || null,
+            },
+          ]),
       {
         key: 'condition',
         label: 'Condition',
@@ -116,6 +324,30 @@
     formReady: () => Boolean(pv.findControl(TITLE_SPEC)),
     waitHint:
       'Choisissez une catégorie — les champs (titre, prix, description) se rempliront automatiquement. / Choose a category and the fields will fill themselves.',
+    // Automated category pick; [] on failure = fall back to the waiting hint.
+    prepare: async (item) => {
+      const path = await autoPickCategory(item);
+      if (!path) return [];
+      return [
+        {
+          key: 'category',
+          label: 'Category',
+          status: 'filled',
+          value: path,
+          // The pick is a heuristic — surface it so the user double-checks.
+          note: `Auto-picked: ${path} — verify before publishing.`,
+        },
+      ];
+    },
+    // Hidden <input type="file" aria-label="Photos"> behind the dropzone.
+    photoInput: () =>
+      document.querySelector('input[type="file"][accept*="image"]') ||
+      document.querySelector('input[type="file"]'),
+    // "0/5 photos" (free tier; 15 with a subscription) in the page text.
+    maxPhotos: () => {
+      const m = (document.body.innerText || '').match(/(\d+)\s*\/\s*(\d+)\s*photos/i);
+      return m ? Math.max(0, Number(m[2]) - Number(m[1])) : 5;
+    },
     buildFields,
   };
 

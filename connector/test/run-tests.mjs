@@ -10,8 +10,11 @@
  *     content-script injection, popup → storage → tabs.sendMessage plumbing
  *     and the fill engine all run exactly as they would in production.
  *  4. Covers: onboarding (profile link paste), cached-inventory search,
- *     per-item "Sell on Anibis" fill, the pending-autofill flow for a tab
- *     the popup opens, the app-payload paste path, and the wrong-page guard.
+ *     per-item "Sell on Anibis" fill with automatic category pick (one- and
+ *     two-level menu traversal) and staged-photo attach, the manual fallback
+ *     when the category doesn't map, the pending-autofill flow for a tab
+ *     the popup opens (incl. photo attach on the React fixture), the
+ *     app-payload paste path, and the wrong-page guard.
  *
  * Relay sync itself is covered by unit-tests.mjs (decode + decrypt) and the
  * server-side e2e (server/src/e2e-encrypted.ts); here the relay origin is
@@ -69,6 +72,8 @@ const CACHED_ITEMS = [
     id: 'ItemDrill1',
     docId: DOC_ID,
     description: 'Cordless drill 18V',
+    // Maps via the synonyms table onto the fixture's "Jardin & Outils"
+    // top-level leaf (single-level auto category pick).
     category: 'Tools',
     tags: ['workshop'],
     quantity: 1,
@@ -77,11 +82,17 @@ const CACHED_ITEMS = [
     valueCurrent: { amount: 123, currency: 'CHF' },
     weightGrams: 1450,
     serialIncluded: true,
-    photos: [],
+    // The blobs are pre-seeded into the extension's IndexedDB photo cache,
+    // so staging works with the relay unreachable.
+    photos: [
+      { hash: 'PhotoHash1', mime: 'image/png' },
+      { hash: 'PhotoHash2', mime: 'image/png' },
+    ],
     createdAt: 1700000000000,
     updatedAt: 1700000500000,
   },
   {
+    // No category: the auto-pick must stand down (manual fallback flow).
     id: 'ItemLamp11',
     docId: DOC_ID,
     description: 'Vintage desk lamp',
@@ -92,7 +103,25 @@ const CACHED_ITEMS = [
     createdAt: 1710000000000,
     updatedAt: 1710000000000,
   },
+  {
+    // "Lampe" maps to Maison › Luminaires (two-level auto traversal).
+    id: 'ItemLava11',
+    docId: DOC_ID,
+    description: 'Lampe à lave orange',
+    category: 'Lampe',
+    tags: [],
+    quantity: 1,
+    valueCurrent: { amount: 30, currency: 'CHF' },
+    serialIncluded: false,
+    photos: [],
+    createdAt: 1712000000000,
+    updatedAt: 1712000000000,
+  },
 ];
+
+/** 1×1 red PNG, enough to exercise the base64 -> File -> input.files path. */
+const TINY_PNG_B64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 /* 1. Build the React fixture ---------------------------------------- */
 
@@ -237,10 +266,10 @@ try {
   );
   await popup.reload();
   await popup.waitForSelector('#view-main:not([hidden])');
-  check('cached items render', (await popup.locator('.item').count()) === 2);
+  check('cached items render', (await popup.locator('.item').count()) === 3);
   check(
     'counts reflect the cache',
-    (await popup.locator('#counts').textContent()).includes('2 items'),
+    (await popup.locator('#counts').textContent()).includes('3 items'),
   );
 
   await popup.fill('#search', 'bosch drill');
@@ -252,27 +281,50 @@ try {
   );
   await popup.fill('#search', '');
 
-  /* "Sell on Anibis" from an item row ---------------------------------- */
+  /* "Sell on Anibis" from an item row: auto category + photo attach ----- */
 
   console.log('\nSell on Anibis (fixture at https://www.anibis.ch/fr/listings/new):');
+
+  // Seed the extension's IndexedDB photo cache so staging works without a
+  // relay (fetchPhotoBlob checks the cache before any network).
+  await popup.evaluate(
+    async ([b64, hashes]) => {
+      const db = await new Promise((resolve, reject) => {
+        const req = indexedDB.open('pv-photos', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('blobs');
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      const blob = await (await fetch(`data:image/png;base64,${b64}`)).blob();
+      await new Promise((resolve) => {
+        const tx = db.transaction('blobs', 'readwrite');
+        for (const hash of hashes) tx.objectStore('blobs').put(blob, hash);
+        tx.oncomplete = resolve;
+      });
+    },
+    [TINY_PNG_B64, ['PhotoHash1', 'PhotoHash2']],
+  );
+
   const anibis = await context.newPage();
   await anibis.goto('https://www.anibis.ch/fr/listings/new');
   await anibis.bringToFront();
   await popup.evaluate(() => {
     document.querySelector('[data-item-id="ItemDrill1"] [data-sell="anibis"]').click();
   });
-  // The fields are gated behind the category pick: the fill must wait and
-  // tell the user what to do instead of failing.
-  await anibis.waitForSelector('#pv-fill-overlay', { timeout: 10_000 });
-  check(
-    'waiting hint shown while the category is not picked yet',
-    (await anibis.locator('#pv-fill-overlay').textContent()).includes('catégorie'),
-  );
-  await anibis.click('#pick-category');
+  // "Tools" maps onto the "Jardin & Outils" top-level leaf: the fill must
+  // click it itself and proceed without any manual step.
   await anibis.waitForFunction(
-    () => document.querySelector('input[name="subject"]')?.value !== '',
+    () => document.querySelector('input[name="subject"]')?.value,
     null,
-    { timeout: 10_000 },
+    { timeout: 20_000 },
+  );
+  check(
+    'category auto-picked from the item category (Tools -> Jardin & Outils)',
+    (await anibis.locator('#category-name').textContent()) === 'Jardin & Outils',
+  );
+  check(
+    'overlay reports the auto-picked category',
+    (await anibis.locator('#pv-fill-overlay').textContent()).includes('Auto-picked'),
   );
   check(
     'title generated from item (brand + description)',
@@ -289,21 +341,93 @@ try {
     'serial presence mentioned, number never present',
     desc.includes('Serial number on record') && !desc.includes('SN-'),
   );
-  check('status overlay shown', (await anibis.locator('#pv-fill-overlay').count()) === 1);
+  check(
+    'staged photos attached to the file input (DataTransfer)',
+    (await anibis.locator('#photo-count').textContent()) === '2/5 photos',
+    await anibis.locator('#photo-count').textContent(),
+  );
+  check(
+    'attached files carry item-derived names',
+    (await anibis.locator('#photo-names').textContent()).includes('Cordless-drill-18V-1.png'),
+    await anibis.locator('#photo-names').textContent(),
+  );
   check(
     'popup reports the fill',
     (await popup.locator('#status').textContent()).includes('filled'),
   );
 
+  /* Two-level auto traversal (Lampe -> Maison › Luminaires) -------------- */
+
+  await anibis.reload();
+  await anibis.bringToFront();
+  await popup.evaluate(() => {
+    document.querySelector('[data-item-id="ItemLava11"] [data-sell="anibis"]').click();
+  });
+  await anibis.waitForFunction(
+    () => document.querySelector('input[name="subject"]')?.value,
+    null,
+    { timeout: 20_000 },
+  );
+  check(
+    'two-level category traversal (Lampe -> Maison › Luminaires)',
+    (await anibis.locator('#category-name').textContent()) === 'Maison › Luminaires',
+    await anibis.locator('#category-name').textContent(),
+  );
+  check(
+    'photo staging of the previous item was cleared (item has no photos)',
+    (await anibis.locator('#photo-count').textContent()) === '0/5 photos',
+  );
+
+  /* Manual fallback: no category on the item ----------------------------- */
+
+  await anibis.reload();
+  await anibis.bringToFront();
+  await popup.evaluate(() => {
+    document.querySelector('[data-item-id="ItemLamp11"] [data-sell="anibis"]').click();
+  });
+  // No category on the item: the fill must wait with the hint instead of
+  // guessing, and complete once the user picks manually.
+  await anibis.waitForSelector('#pv-fill-overlay', { timeout: 10_000 });
+  check(
+    'waiting hint shown when the category cannot be auto-picked',
+    (await anibis.locator('#pv-fill-overlay').textContent()).includes('catégorie'),
+  );
+  check(
+    'no category was guessed',
+    (await anibis.locator('#category-name').textContent()) === '',
+  );
+  await anibis.click('#pick-category');
+  await anibis.click('#cat-menu li:text-is("Maison")');
+  await anibis.click('#cat-menu li:text-is("Luminaires")');
+  await anibis.waitForFunction(
+    () => document.querySelector('input[name="subject"]')?.value,
+    null,
+    { timeout: 10_000 },
+  );
+  check(
+    'fields fill after the manual category pick',
+    (await anibis.inputValue('input[name="subject"]')) === 'Vintage desk lamp',
+  );
+
   /* Pending autofill (tab opened by the popup) -------------------------- */
 
   console.log('\nPending autofill on Facebook (fixture, React-controlled):');
-  await popup.evaluate((p) => {
-    return chrome.storage.local.set({
-      'pv:payload': p,
-      'pv:pending': { site: 'facebook', at: Date.now() },
-    });
-  }, payload);
+  await popup.evaluate(
+    ([p, b64]) => {
+      return chrome.storage.local.set({
+        'pv:payload': p,
+        'pv:pending': { site: 'facebook', at: Date.now() },
+        'pv:photos': {
+          at: Date.now(),
+          photos: [
+            { name: 'sony-1.png', type: 'image/png', b64 },
+            { name: 'sony-2.png', type: 'image/png', b64 },
+          ],
+        },
+      });
+    },
+    [payload, TINY_PNG_B64],
+  );
   const fb = await context.newPage();
   await fb.goto('https://www.facebook.com/marketplace/create/item');
   await fb.waitForSelector('#state');
@@ -316,6 +440,11 @@ try {
   check('pending flag auto-fills the freshly opened form', state.title === payload.item.title);
   check('React state received the price (native-setter trick)', state.price === '120');
   check('React state received the description', state.description === payload.item.description);
+  check(
+    'staged photos reach the React file input (change event observed)',
+    state.photos === 2,
+    `photos=${state.photos}`,
+  );
   check(
     'pending flag is cleared after one use',
     await popup.evaluate(async () => {
@@ -333,12 +462,16 @@ try {
     document.querySelector('#payload').value = json;
     document.querySelector('#fill-page').click();
   }, JSON.stringify(payload));
-  await anibis.waitForSelector('#pv-fill-overlay', { timeout: 10_000 });
-  await anibis.click('#pick-category');
+  // "Audio & Hi-Fi" auto-picks the "TV & Audio" leaf — no manual step.
   await anibis.waitForFunction(
-    () => document.querySelector('input[name="subject"]')?.value !== '',
+    () => document.querySelector('input[name="subject"]')?.value,
     null,
-    { timeout: 10_000 },
+    { timeout: 20_000 },
+  );
+  check(
+    'pasted payload category auto-picks (Audio & Hi-Fi -> TV & Audio)',
+    (await anibis.locator('#category-name').textContent()) === 'TV & Audio',
+    await anibis.locator('#category-name').textContent(),
   );
   check(
     'pasted app payload fills the page (AI copy path)',
@@ -348,6 +481,11 @@ try {
     'description uses the FR translation (page lang=fr)',
     (await anibis.inputValue('textarea[name="body"]')) ===
       payload.item.descriptionTranslations.fr,
+  );
+  check(
+    'photos staged for another item never attach to a pasted payload',
+    (await anibis.locator('#photo-count').textContent()) === '0/5 photos',
+    await anibis.locator('#photo-count').textContent(),
   );
 
   /* Wrong-page guard ---------------------------------------------------- */

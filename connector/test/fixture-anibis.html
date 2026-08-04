@@ -3,11 +3,15 @@
   Local stand-in for the Anibis new-listing form
   (https://www.anibis.ch/fr/listings/new, verified live 2026-08).
   Mirrors what content/anibis.js relies on:
-   - the detail fields only exist after a category is picked (a cascading
-     MUI menu on the real site — one button here), which exercises the
-     formReady() wait in fill-core;
+   - a cascading category menu (li[role="menuitem"], submenu replaces the
+     list in place with a leading "Retour" row) opened by a
+     "Choisir une catégorie" button — exercises the auto-pick in prepare();
+   - the detail fields only exist after a category is picked, which
+     exercises the formReady() wait in fill-core;
    - title is <input name="subject"> ("Titre *"), description is
-     <textarea name="body"> ("Description *"), price is a number input.
+     <textarea name="body"> ("Description *"), price is a number input;
+   - a hidden <input type="file" aria-label="Photos" multiple> plus an
+     "x/5 photos" counter — exercises the staged-photo attach.
   Plain (non-React) controls; the React fill path is covered by the
   Facebook fixture. A logged-in manual test against the real form is still
   the reference.
@@ -20,6 +24,10 @@
       body { font-family: sans-serif; max-width: 560px; margin: 40px auto; }
       label { display: block; margin: 14px 0 4px; font-weight: 600; }
       input, textarea, select { width: 100%; padding: 6px; box-sizing: border-box; }
+      #cat-menu { border: 1px solid #ccc; border-radius: 6px; max-width: 260px;
+                  list-style: none; padding: 4px; }
+      #cat-menu li { padding: 6px 10px; cursor: pointer; }
+      #cat-menu li:hover { background: #eee; }
     </style>
   </head>
   <body>
@@ -28,6 +36,7 @@
       <label>Catégorie</label>
       <button id="pick-category" type="button">Choisir une catégorie</button>
       <span id="category-name"></span>
+      <ul id="cat-menu" hidden></ul>
 
       <div id="details" hidden>
         <label for="ad-npa">NPA *</label>
@@ -54,12 +63,64 @@
         </select>
       </div>
 
-      <p>Photos: <em>glissez vos photos ici</em></p>
+      <label>Photos</label>
+      <!-- Hidden like the live one (behind a styled dropzone). -->
+      <input id="photo-input" type="file" aria-label="Photos" multiple
+             accept="image/jpg,image/jpeg,image/png,image/gif" style="display:none" />
+      <div id="photo-count">0/5 photos</div>
+      <div id="photo-names"></div>
     </form>
     <script>
-      document.getElementById('pick-category').addEventListener('click', () => {
-        document.getElementById('category-name').textContent = 'Maison › Luminaires';
+      // Subset of the live category tree (null = leaf).
+      const TREE = {
+        'Informatique': null,
+        'Jardin & Outils': null,
+        'Maison': { 'Luminaires': null, 'Mobilier': null },
+        'TV & Audio': null,
+        'Autres': null,
+      };
+      const menu = document.getElementById('cat-menu');
+      let trail = [];
+      const levelOf = () => trail.reduce((lvl, name) => lvl[name], TREE);
+
+      function renderMenu() {
+        menu.replaceChildren();
+        const names = trail.length ? ['Retour', ...Object.keys(levelOf())] : Object.keys(levelOf());
+        for (const name of names) {
+          const li = document.createElement('li');
+          li.setAttribute('role', 'menuitem');
+          li.textContent = name;
+          li.addEventListener('click', () => onPick(name));
+          menu.appendChild(li);
+        }
+      }
+      function onPick(name) {
+        if (name === 'Retour') {
+          trail.pop();
+          renderMenu();
+          return;
+        }
+        if (levelOf()[name]) {
+          trail.push(name);
+          renderMenu();
+          return;
+        }
+        menu.hidden = true;
+        document.getElementById('category-name').textContent = [...trail, name].join(' › ');
         document.getElementById('details').hidden = false;
+      }
+      document.getElementById('pick-category').addEventListener('click', () => {
+        trail = [];
+        renderMenu();
+        menu.hidden = false;
+      });
+
+      const photoInput = document.getElementById('photo-input');
+      photoInput.addEventListener('change', () => {
+        document.getElementById('photo-count').textContent = `${photoInput.files.length}/5 photos`;
+        document.getElementById('photo-names').textContent = [...photoInput.files]
+          .map((f) => f.name)
+          .join(', ');
       });
     </script>
   </body>

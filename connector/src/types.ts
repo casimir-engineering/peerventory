@@ -93,3 +93,21 @@ export interface ListingPayload {
   item: ListingPayloadItem;
   photosNote: string;
 }
+
+/* ----- staged photos (popup -> content scripts, `pv:photos`) ----- */
+
+/** One decrypted photo, base64-encoded so it survives chrome.storage.local
+ * (Blobs cannot cross that boundary; the popup may be closed by the time the
+ * content script attaches, so messaging is not an option either). */
+export interface StagedPhoto {
+  name: string;
+  type: string;
+  /** base64 of the decrypted image bytes (no data-URL prefix). */
+  b64: string;
+}
+
+export interface StagedPhotos {
+  /** Epoch ms when staged; content scripts ignore stale stagings. */
+  at: number;
+  photos: StagedPhoto[];
+}

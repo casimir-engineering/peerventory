@@ -12,6 +12,11 @@
  * is looking at — no navigation, no submission, no background activity — but
  * category/condition dropdowns and publishing are intentionally left to the
  * user.
+ *
+ * Photos staged by the popup are attached through the create form's hidden
+ * <input type="file"> via DataTransfer (the standard mechanism, known to
+ * work on Marketplace); the fill engine caps at maxPhotos (Marketplace item
+ * listings take 10). NOT yet verified against the live site.
  */
 
 (() => {
@@ -83,6 +88,12 @@
     isListingPage: () =>
       /(^|\.)facebook\.com$/.test(location.hostname) &&
       location.pathname.startsWith('/marketplace/create'),
+    // The create form's photo input accepts image/* (and video); hidden
+    // behind the "Add photos" tile.
+    photoInput: () =>
+      document.querySelector('input[type="file"][accept*="image"]') ||
+      document.querySelector('input[type="file"]'),
+    maxPhotos: () => 10,
     buildFields,
   };
 

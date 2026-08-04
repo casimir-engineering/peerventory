@@ -18,9 +18,17 @@ import {
   putCachedInventory,
   setPayload,
   setPendingFill,
+  setStagedPhotos,
 } from './storage';
 import { syncInventory } from './sync';
-import type { CacheMap, ExtItem, ListingPayload, Profile, ProfileHandle } from './types';
+import type {
+  CacheMap,
+  ExtItem,
+  ListingPayload,
+  Profile,
+  ProfileHandle,
+  StagedPhoto,
+} from './types';
 
 type SiteId = 'anibis' | 'facebook';
 
@@ -275,10 +283,58 @@ async function sendFill(tabId: number): Promise<
   return null;
 }
 
+/* Staged photos travel through chrome.storage.local as base64: Blobs cannot
+ * cross that boundary, and runtime messaging is no option either because the
+ * popup closes (killing its blob URLs and listeners) the moment the
+ * marketplace tab opens. Size caps keep the storage write sane. */
+const MAX_STAGED_PHOTOS = 10;
+const MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 24 * 1024 * 1024;
+
+function blobToB64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => {
+      const dataUrl = fr.result as string;
+      resolve(dataUrl.slice(dataUrl.indexOf(',') + 1));
+    };
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
+/** Decrypt the item's photos and stage them for the content script; always
+ * overwrites the previous staging so another item's photos never linger. */
+async function stagePhotos(item: ExtItem): Promise<number> {
+  const handle = handleFor(item.docId);
+  if (!handle || !profile || item.photos.length === 0) {
+    await setStagedPhotos(null);
+    return 0;
+  }
+  const base = safeFilename(item.description || item.brandModel || 'item');
+  const staged: StagedPhoto[] = [];
+  let total = 0;
+  for (const photo of item.photos.slice(0, MAX_STAGED_PHOTOS)) {
+    const blob = await fetchPhotoBlob(profile.origin, handle, photo.hash);
+    if (!blob || blob.size > MAX_PHOTO_BYTES || total + blob.size > MAX_TOTAL_BYTES) continue;
+    total += blob.size;
+    staged.push({
+      name: `${base}-${staged.length + 1}.${extensionForMime(blob.type)}`,
+      type: blob.type || 'image/jpeg',
+      b64: await blobToB64(blob),
+    });
+  }
+  await setStagedPhotos(staged.length > 0 ? { at: Date.now(), photos: staged } : null);
+  return staged.length;
+}
+
 async function sellItem(item: ExtItem, site: SiteId): Promise<void> {
   const status = $('status');
   const payload = buildListingPayload(item);
   await setPayload(payload);
+  if (item.photos.length > 0) setStatus(status, `Decrypting ${item.photos.length} photo(s)…`);
+  const staged = await stagePhotos(item);
+  const photoNote = staged > 0 ? ` ${staged} photo(s) attach automatically.` : '';
 
   const active = await findMarketplaceTab();
   if (active && active.site === site) {
@@ -296,7 +352,7 @@ async function sellItem(item: ExtItem, site: SiteId): Promise<void> {
   }
   await setPendingFill(site);
   await chrome.tabs.create({ url: SITES[site].createUrl });
-  setStatus(status, `Opened ${SITES[site].label} — the form fills itself once it loads.`, 'ok');
+  setStatus(status, `Opened ${SITES[site].label} — the form fills itself once it loads.${photoNote}`, 'ok');
 }
 
 async function usePastedPayload(text: string): Promise<boolean> {
@@ -313,6 +369,9 @@ async function usePastedPayload(text: string): Promise<boolean> {
     return false;
   }
   await setPayload(raw as ListingPayload);
+  // A pasted payload carries no photo bytes — staged photos of a previously
+  // sold item must not attach to this listing.
+  await setStagedPhotos(null);
   setStatus(status, `Saved “${(raw as ListingPayload).item.title}” — use Fill this page below.`, 'ok');
   return true;
 }

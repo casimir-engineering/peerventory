@@ -19,6 +19,7 @@ function CreateListing() {
   const [title, setTitle] = useState('');
   const [price, setPrice] = useState('');
   const [description, setDescription] = useState('');
+  const [photos, setPhotos] = useState(0);
 
   return (
     <div style={{ maxWidth: 560, margin: '40px auto', fontFamily: 'sans-serif' }}>
@@ -60,8 +61,18 @@ function CreateListing() {
       <p>
         Photos: <em>drag photos here</em>
       </p>
+      {/* Hidden file input like the live "Add photos" tile; the staged-photo
+          attach must reach React through a bubbling change event. */}
+      <input
+        type="file"
+        aria-label="Add photos"
+        accept="image/*,video/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={(e) => setPhotos(e.target.files.length)}
+      />
       {/* React-side view of the state, asserted by the automated test. */}
-      <pre id="state">{JSON.stringify({ title, price, description })}</pre>
+      <pre id="state">{JSON.stringify({ title, price, description, photos })}</pre>
     </div>
   );
 }
