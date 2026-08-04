@@ -61,7 +61,17 @@ interface PendingPhoto {
   role: PhotoRole;
 }
 
-const CONDITION_PRESETS = ['New', 'Like new', 'Very good', 'Good', 'Acceptable', 'For parts'];
+/** Prefilled for new items; the user can change or clear it before saving. */
+const DEFAULT_CONDITION = 'Used - good condition';
+
+const CONDITION_PRESETS = [
+  'New (sealed)',
+  'Like new',
+  'Used - very good condition',
+  DEFAULT_CONDITION,
+  'Used - acceptable',
+  'For parts / not working',
+];
 
 /** Ids of the collapsible optional sections, as stored in meta.fieldPrefs. */
 const SECTION_CATEGORY_TAGS = 'categoryTags';
@@ -121,7 +131,7 @@ export function NewItemPage() {
   const [purchasePrice, setPurchasePrice] = useState('');
   const [vendor, setVendor] = useState('');
   const [boxId, setBoxId] = useState('');
-  const [condition, setCondition] = useState('');
+  const [condition, setCondition] = useState(DEFAULT_CONDITION);
   const [lithiumBattery, setLithiumBattery] = useState(false);
   const [countryOfOrigin, setCountryOfOrigin] = useState('');
   const [acquisition, setAcquisition] = useState<'' | AcquisitionMethod>('');
@@ -177,7 +187,9 @@ export function NewItemPage() {
     purchaseDate !== '' ||
     purchasePrice.trim() !== '' ||
     vendor.trim() !== '' ||
-    condition.trim() !== '' ||
+    // Prefilled default: neither the untouched default nor clearing it should
+    // trip the "Discard this item?" guard on its own.
+    (condition.trim() !== '' && condition.trim() !== DEFAULT_CONDITION) ||
     lithiumBattery ||
     notes.trim() !== '' ||
     brandModel.trim() !== '' ||
@@ -473,7 +485,7 @@ export function NewItemPage() {
     setPurchaseDate('');
     setPurchasePrice('');
     setVendor('');
-    setCondition('');
+    setCondition(DEFAULT_CONDITION);
     setLithiumBattery(false);
     setNotes('');
     setBrandModel('');
@@ -530,7 +542,9 @@ export function NewItemPage() {
         draft.serialNumber ||
         draft.purchase ||
         draft.boxId ||
-        draft.condition ||
+        // The untouched default doesn't mean the user works with conditions,
+        // so it alone must not pre-expand the customs section everywhere.
+        (draft.condition && draft.condition !== DEFAULT_CONDITION) ||
         draft.lithiumBattery ||
         draft.countryOfOrigin ||
         draft.acquisition ||
