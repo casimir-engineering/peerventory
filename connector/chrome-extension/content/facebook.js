@@ -78,6 +78,7 @@
   }
 
   const site = {
+    id: 'facebook',
     label: 'Facebook Marketplace',
     isListingPage: () =>
       /(^|\.)facebook\.com$/.test(location.hostname) &&

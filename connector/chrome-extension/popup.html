@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <style>
       body {
-        width: 340px;
+        width: 420px;
         margin: 0;
         padding: 14px;
         font: 13px/1.45 -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -12,24 +12,23 @@
         color: #f2f2f7;
       }
       h1 { font-size: 15px; margin: 0 0 10px; }
-      textarea {
+      textarea, input[type='text'], input[type='search'] {
         width: 100%;
         box-sizing: border-box;
-        height: 110px;
         background: #2c2c2e;
         color: #f2f2f7;
         border: 1px solid #3a3a3c;
         border-radius: 8px;
         padding: 8px;
-        font: 11px/1.4 ui-monospace, Menlo, monospace;
-        resize: vertical;
+        font: inherit;
       }
-      .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+      textarea { height: 88px; font: 11px/1.4 ui-monospace, Menlo, monospace; resize: vertical; }
+      .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+      .row > button { flex: 1; }
       button {
-        flex: 1;
         border: 0;
         border-radius: 8px;
-        padding: 8px 10px;
+        padding: 7px 10px;
         font: inherit;
         cursor: pointer;
         background: #3a3a3c;
@@ -38,45 +37,115 @@
       }
       button.primary { background: #0a84ff; color: #fff; }
       button:disabled { opacity: 0.5; cursor: default; }
-      #summary {
-        margin-top: 10px;
-        padding: 8px 10px;
-        background: #2c2c2e;
-        border-radius: 8px;
-        display: none;
-      }
-      #summary .t { font-weight: 600; }
-      #status { margin-top: 10px; min-height: 18px; }
-      #status.err { color: #ff453a; }
-      #status.ok { color: #34c759; }
+      .status { margin-top: 10px; min-height: 18px; }
+      .status.err { color: #ff453a; }
+      .status.ok { color: #34c759; }
       .hint { color: #8e8e93; margin-top: 10px; }
+      .banner {
+        margin: 10px 0 8px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        background: #2c2c2e;
+        color: #8e8e93;
+      }
+      .banner.on { background: #0a3d20; color: #34c759; }
+      header { display: flex; align-items: center; gap: 8px; }
+      header .grow { flex: 1; font-weight: 600; font-size: 14px; }
+      header button { flex: none; padding: 6px 10px; }
+      #counts { color: #8e8e93; margin: 6px 0 8px; }
+      #results { max-height: 380px; overflow-y: auto; }
+      .item {
+        display: flex;
+        gap: 10px;
+        padding: 8px;
+        border-radius: 10px;
+        background: #2c2c2e;
+        margin-bottom: 8px;
+      }
+      .thumb {
+        width: 52px;
+        height: 52px;
+        flex: none;
+        border-radius: 8px;
+        background: #3a3a3c;
+        overflow: hidden;
+      }
+      .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .item .body { flex: 1; min-width: 0; }
+      .item .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .item .meta { color: #8e8e93; margin: 2px 0 6px; font-size: 12px; }
+      .item .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+      .item .actions button { padding: 4px 8px; font-size: 12px; background: #48484a; }
+      .empty { color: #8e8e93; padding: 14px 4px; text-align: center; }
+      details { margin-top: 10px; color: #8e8e93; }
+      details textarea { margin-top: 8px; }
+      summary { cursor: pointer; }
+      .dropzone {
+        margin-top: 10px;
+        padding: 12px;
+        border: 1.5px dashed #48484a;
+        border-radius: 10px;
+        color: #8e8e93;
+        text-align: center;
+      }
+      #view-onboarding.drop .dropzone { border-color: #0a84ff; color: #0a84ff; }
+      #view-onboarding textarea { margin-top: 10px; }
     </style>
   </head>
   <body>
-    <h1>Peerventory Listing Connector</h1>
-    <textarea
-      id="payload"
-      placeholder='Paste the listing payload here (Sell / export listing → "Copy for extension" in the app)'
-    ></textarea>
-    <div class="row">
-      <button id="read-clipboard">Read clipboard</button>
-      <button id="save">Save payload</button>
+    <div id="view-onboarding" hidden>
+      <h1>Peerventory Connector</h1>
+      <p class="hint" style="margin-top:0">
+        Connect your Peerventory profile once: in the app open
+        <b>Inventories → Backup / transfer</b>, then scan the QR with your webcam, drop /
+        paste a QR image here, or paste the backup link. The extension gets read access to
+        all your inventories.
+      </p>
+      <div class="row">
+        <button id="ob-camera" class="primary">Scan QR with camera</button>
+        <button id="ob-qr-btn">QR image…</button>
+      </div>
+      <div class="dropzone">…or drop / paste a QR screenshot anywhere here</div>
+      <textarea id="ob-link" placeholder="…or paste the profile share link (https://…/#/restore/…)"></textarea>
+      <div class="row" id="ob-origin-row" hidden>
+        <input type="text" id="ob-origin" placeholder="Server address, e.g. https://inv.example.com" />
+      </div>
+      <div class="row">
+        <button id="ob-paste">Read clipboard</button>
+        <button id="ob-connect">Connect</button>
+      </div>
+      <input type="file" id="ob-qr" accept="image/*" hidden />
+      <div id="ob-status" class="status"></div>
+      <p class="hint">
+        The profile contains access tokens and encryption keys. They are stored only on this
+        browser (chrome.storage.local) and only ever sent to your own sync relay.
+      </p>
     </div>
-    <div id="summary">
-      <div class="t" id="summary-title"></div>
-      <div id="summary-price"></div>
-      <div id="summary-photos"></div>
+
+    <div id="view-main" hidden>
+      <header>
+        <div class="grow" id="main-user">Your items</div>
+        <button id="refresh">Refresh</button>
+        <button id="disconnect" title="Forget profile and cached data">Disconnect</button>
+      </header>
+      <div id="site-banner" class="banner"></div>
+      <input type="search" id="search" placeholder="Search items (name, brand, category, tags…)" />
+      <div id="counts"></div>
+      <div id="results"></div>
+      <details>
+        <summary>Paste a listing payload from the app (AI-drafted copy)</summary>
+        <textarea id="payload" placeholder='JSON from the app’s Sell dialog → "Copy for extension"'></textarea>
+        <div class="row">
+          <button id="payload-save">Save payload</button>
+          <button id="fill-page" class="primary">Fill this page</button>
+        </div>
+      </details>
+      <div id="status" class="status"></div>
+      <p class="hint">
+        Photos can’t be attached automatically — use an item’s <b>Photos</b> button to download
+        them, then drag the files into the form. Category/condition pickers stay manual.
+      </p>
     </div>
-    <div class="row">
-      <button id="fill" class="primary">Fill this page</button>
-      <button id="clear">Clear</button>
-    </div>
-    <div id="status"></div>
-    <p class="hint">
-      Works on the Anibis publish form and the Facebook Marketplace “Create listing” form. Photos:
-      download them from the app, then drag the files into the form yourself — Chrome does not let
-      extensions attach files.
-    </p>
     <script src="popup.js"></script>
   </body>
 </html>

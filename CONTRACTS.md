@@ -212,6 +212,31 @@ Server requires env `ANTHROPIC_API_KEY` (503 `{ error: "ai-not-configured" }` wh
 with the images and a strict-JSON instruction, parses the reply (tolerating code fences),
 responds `{ suggestions: AiSuggestions }`. In-memory rate limit: 5 requests/min per docId (429).
 
+## Listing connector (Chrome extension, connector/)
+
+The connector is a second CLIENT of the contracts above — the server knows
+nothing about it and needs no changes for it.
+
+- Onboarding: the user scans / uploads the profile QR or pastes the backup
+  link (`#/restore/<payload>`, payload v2 above). The URL's origin doubles as
+  the relay origin (`wss <origin>/sync`, `<origin>/api`). The `k` (AI key)
+  field of a backup payload is deliberately dropped by the extension.
+- Sync: per handle, a read-only Hocuspocus client of the OUTER doc — auth
+  token JSON `{"t": "<roToken ?? rwToken>"}`, no create-handshake — that
+  decrypts `enc:log` per "End-to-end encryption" and never appends to it.
+  Materialized items are cached in `chrome.storage.local`; tokens and
+  content keys also live only there (never `storage.sync`, never sent
+  anywhere but the relay).
+- Photos: `GET /api/blobs/:docId/:hash` with `x-token`, decrypted
+  client-side; relies on the blob API's `Access-Control-Allow-Origin: *`
+  (chrome-extension:// origins are cross-origin to the relay).
+- The item projection stores whether a serial number exists, never the
+  number itself.
+- Listing payload v1 (app "Copy for extension" -> popup -> content scripts)
+  is documented in connector/README.md; `app/src/ui/lib/listing.ts`,
+  `connector/src/listing.ts` and `connector/chrome-extension/content/fill-core.js`
+  must stay in sync.
+
 ## Deployment shape
 
 Single VPS, Docker Compose (`deploy/`):

@@ -92,6 +92,7 @@
   }
 
   const site = {
+    id: 'anibis',
     label: 'Anibis',
     // Loose on purpose: any anibis page where a listing form is visible.
     isListingPage: () =>

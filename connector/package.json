@@ -1,0 +1,23 @@
+{
+  "name": "peerventory-connector",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "npm run build && node test/unit-tests.mjs",
+    "test:relay": "npm run build && node test/integration-relay.mjs",
+    "test": "npm run test:unit && npm run test:relay && cd test && npm test"
+  },
+  "dependencies": {
+    "@hocuspocus/provider": "^4.4.0",
+    "jsqr": "^1.4.0",
+    "yjs": "^13.6.31"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.32",
+    "esbuild": "^0.27.3",
+    "typescript": "^7.0.2"
+  }
+}

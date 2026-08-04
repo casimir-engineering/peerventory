@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Peerventory Connector — scan profile QR</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        font: 15px/1.5 -apple-system, 'Segoe UI', Roboto, sans-serif;
+        background: #1c1c1e;
+        color: #f2f2f7;
+        padding: 24px;
+        box-sizing: border-box;
+      }
+      h1 { font-size: 20px; margin: 0; }
+      p { margin: 0; color: #8e8e93; max-width: 460px; text-align: center; }
+      #video-wrap {
+        position: relative;
+        width: min(480px, 90vw);
+        aspect-ratio: 4 / 3;
+        border-radius: 16px;
+        overflow: hidden;
+        background: #000;
+      }
+      video { width: 100%; height: 100%; object-fit: cover; }
+      .reticle {
+        position: absolute;
+        inset: 18%;
+        border: 2px solid rgba(255, 255, 255, 0.7);
+        border-radius: 12px;
+        pointer-events: none;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 9px 14px;
+        font: inherit;
+        cursor: pointer;
+        background: #3a3a3c;
+        color: #f2f2f7;
+      }
+      .status { min-height: 22px; text-align: center; max-width: 460px; }
+      .status.err { color: #ff453a; }
+      .status.ok { color: #34c759; font-weight: 600; }
+      #done { text-align: center; }
+      #done .big { font-size: 40px; }
+    </style>
+  </head>
+  <body>
+    <h1>Scan your Peerventory profile QR</h1>
+    <p>
+      In the app open <b>Inventories → Backup / transfer</b> and show the QR code, then hold it
+      up to the camera. Everything is decoded locally in this tab.
+    </p>
+    <div id="video-wrap">
+      <video id="video" muted playsinline></video>
+      <div class="reticle" aria-hidden="true"></div>
+    </div>
+    <div id="done" hidden>
+      <div class="big">✓</div>
+      <p>Profile connected. Close this tab and click the extension icon to browse your items.</p>
+    </div>
+    <div id="status" class="status"></div>
+    <button id="file-btn">…or pick / drop a QR image file</button>
+    <input type="file" id="file" accept="image/*" hidden />
+    <script src="scan.js"></script>
+  </body>
+</html>

@@ -303,33 +303,71 @@
     );
   }
 
+  /** One fill run: payload from storage -> fields -> overlay -> result object. */
+  async function runFill(site) {
+    if (!site.isListingPage()) {
+      return { ok: false, error: 'not-listing-page', site: site.label };
+    }
+    const data = await chrome.storage.local.get(PAYLOAD_KEY);
+    const payload = data[PAYLOAD_KEY];
+    if (!validPayload(payload)) {
+      return { ok: false, error: 'no-payload', site: site.label };
+    }
+    try {
+      const results = fillFields(site.buildFields(payload.item), payload.item);
+      showOverlay(site.label, results, payload);
+      return { ok: true, site: site.label, results };
+    } catch (err) {
+      return { ok: false, error: String(err), site: site.label };
+    }
+  }
+
+  /* One-shot autofill for a tab the popup just opened ("Sell on X" with no
+   * marketplace tab active): the popup stores `pv:pending`, this polls until
+   * the listing form exists (SPA pages render it late), fills once, and
+   * clears the flag. Stale flags (> 2 min) are ignored so an old click never
+   * fills an unrelated page. */
+  const PENDING_KEY = 'pv:pending';
+  const PENDING_MAX_AGE_MS = 2 * 60 * 1000;
+  const PENDING_POLLS = 30;
+
+  async function checkPendingFill(site) {
+    const data = await chrome.storage.local.get(PENDING_KEY);
+    const pending = data[PENDING_KEY];
+    if (!pending || pending.site !== site.id) return;
+    if (typeof pending.at !== 'number' || Date.now() - pending.at > PENDING_MAX_AGE_MS) {
+      await chrome.storage.local.remove(PENDING_KEY);
+      return;
+    }
+    for (let i = 0; i < PENDING_POLLS; i++) {
+      if (site.isListingPage()) {
+        await chrome.storage.local.remove(PENDING_KEY);
+        await runFill(site);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+
   /**
-   * site: { label, isListingPage() -> bool, buildFields(payloadItem) -> fields }
-   * Wires the popup's PV_FILL message to the fill run for this site.
+   * site: { id, label, isListingPage() -> bool, buildFields(payloadItem) -> fields }
+   * Wires the popup's PV_FILL message (and the pending-autofill flag) to the
+   * fill run for this site.
    */
   function initSite(site) {
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (!msg || msg.type !== 'PV_FILL') return false;
-      if (!site.isListingPage()) {
-        sendResponse({ ok: false, error: 'not-listing-page', site: site.label });
+      if (!msg) return false;
+      // The popup has no "tabs" permission, so it discovers which supported
+      // site the active tab shows by pinging its content script.
+      if (msg.type === 'PV_PING') {
+        sendResponse({ site: site.id, label: site.label, listing: site.isListingPage() });
         return false;
       }
-      chrome.storage.local.get(PAYLOAD_KEY).then((data) => {
-        const payload = data[PAYLOAD_KEY];
-        if (!validPayload(payload)) {
-          sendResponse({ ok: false, error: 'no-payload', site: site.label });
-          return;
-        }
-        try {
-          const results = fillFields(site.buildFields(payload.item), payload.item);
-          showOverlay(site.label, results, payload);
-          sendResponse({ ok: true, site: site.label, results });
-        } catch (err) {
-          sendResponse({ ok: false, error: String(err), site: site.label });
-        }
-      });
+      if (msg.type !== 'PV_FILL') return false;
+      runFill(site).then(sendResponse);
       return true; // async sendResponse
     });
+    checkPendingFill(site).catch(() => {});
   }
 
   window.__pv = {
@@ -339,6 +377,7 @@
     fillFields,
     showOverlay,
     initSite,
+    runFill,
     validPayload,
     PAYLOAD_KEY,
   };
