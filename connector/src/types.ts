@@ -71,6 +71,19 @@ export interface CachedInventory {
 
 export type CacheMap = Record<string, CachedInventory>;
 
+/* ----- extension settings (chrome.storage.local `pv:ai`) ----- */
+
+/** Language of the generated listing content (title, description). */
+export type ListingLang = 'fr' | 'de' | 'it' | 'en';
+
+export interface AiSettings {
+  /** Default 'fr': Anibis is Swiss, no detection — just a sensible default. */
+  lang: ListingLang;
+  /** Anthropic API key; separate explicit opt-in (the profile backup payload
+   * deliberately never carries it into the extension). */
+  key?: string;
+}
+
 /* ----- listing payload v1 (contract with content scripts / the app) ----- */
 
 export interface ListingPayloadItem {
@@ -85,6 +98,10 @@ export interface ListingPayloadItem {
   weightGrams?: number;
   dimensionsMm?: { l: number; w: number; h: number };
   serialIncluded: boolean;
+  /** Language the title/description were generated in ('fr'|'de'|'it'|'en'). */
+  language?: string;
+  /** True when the copy was AI-written (overlay says so; review before publishing). */
+  aiDrafted?: boolean;
 }
 
 export interface ListingPayload {

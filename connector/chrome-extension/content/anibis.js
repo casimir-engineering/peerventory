@@ -206,21 +206,72 @@
     return null;
   }
 
+  /* AI category pick: the background worker holds the (optional) Anthropic
+   * key and answers with the 0-based index of the scraped option to click.
+   * Any failure resolves to null and the synonyms heuristic below takes
+   * over — the fill never blocks on the AI (the worker enforces a 10s
+   * timeout per call). */
+  function aiAvailable() {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: 'PV_AI_AVAILABLE' }, (res) => {
+          void chrome.runtime.lastError;
+          resolve(Boolean(res && res.available));
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  function aiPickLevel(labels, item) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            type: 'PV_AI_CATEGORY',
+            options: labels,
+            item: {
+              title: item.title || '',
+              category: item.category || '',
+              description: (item.description || '').slice(0, 200),
+            },
+          },
+          (res) => {
+            void chrome.runtime.lastError;
+            resolve(res && typeof res.index === 'number' ? res.index : null);
+          },
+        );
+      } catch {
+        resolve(null);
+      }
+    });
+  }
+
   /** The category path picked by prepare(); makes buildFields skip the manual
    * category hint. */
   let autoPickedPath = null;
+  /** True when at least one menu level was chosen by the linked AI (the
+   * overlay note says which mechanism picked, so the user knows what to
+   * double-check). */
+  let autoPickedByAi = false;
   /** Why the auto-pick stood down: 'no-category' | 'no-match' | 'no-menu'.
    * Drives the waiting hint so the fallback never looks like a silent bug. */
   let autoPickFail = null;
 
   /**
-   * Click through the cascading category menu, matching each level's scraped
-   * options against the synonyms path (or the raw category text). Returns the
-   * human-readable path on success, null when unsure (menu closed again).
+   * Click through the cascading category menu. Each level's scraped options
+   * go to the linked AI first (it sees the item's title/category/description
+   * and the live labels); when no AI is linked or it is unsure, the synonyms
+   * path / raw category text matching takes over. Returns the human-readable
+   * path on success, null when unsure (menu closed again).
    */
   async function autoPickCategory(item) {
     const catNorm = norm(item.category);
-    if (!catNorm) {
+    const ai = await aiAvailable();
+    // Without AI the heuristic needs a category text; the AI can work from
+    // the title/description alone.
+    if (!catNorm && !ai) {
       autoPickFail = 'no-category';
       return null;
     }
@@ -243,14 +294,28 @@
     for (let depth = 0; depth < 5; depth++) {
       const items = visibleMenuItems();
       const beforeSig = menuSignature(items);
-      // Segment of the synonyms path for this level, else the raw category
-      // text (covers items whose category literally names an Anibis option).
-      const target = path && depth < path.length ? path[depth] : catNorm;
-      let choice = bestOption(items, target);
-      if (!choice && target !== catNorm) choice = bestOption(items, catNorm);
+      let choice = null;
+      if (ai) {
+        const selectable = items.filter((li) => !BACK_RE.test(norm(li.textContent)));
+        const idx = await aiPickLevel(
+          selectable.map((li) => (li.textContent || '').trim()),
+          item,
+        );
+        if (idx !== null && idx >= 0 && idx < selectable.length) {
+          choice = selectable[idx];
+          autoPickedByAi = true;
+        }
+      }
+      if (!choice && catNorm) {
+        // Segment of the synonyms path for this level, else the raw category
+        // text (covers items whose category literally names an Anibis option).
+        const target = path && depth < path.length ? path[depth] : catNorm;
+        choice = bestOption(items, target);
+        if (!choice && target !== catNorm) choice = bestOption(items, catNorm);
+      }
       if (!choice) {
         closeMenu();
-        autoPickFail = 'no-match';
+        autoPickFail = catNorm ? 'no-match' : 'no-category';
         return null;
       }
       picked.push((choice.textContent || '').trim());
@@ -403,8 +468,8 @@
           label: 'Category',
           status: 'filled',
           value: path,
-          // The pick is a heuristic — surface it so the user double-checks.
-          note: `Auto-picked: ${path} — verify before publishing.`,
+          // The pick is AI/heuristic — surface it so the user double-checks.
+          note: `${autoPickedByAi ? 'AI-picked' : 'Auto-picked'}: ${path} — verify before publishing.`,
         },
       ];
     },

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Peerventory Connector",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Search your Peerventory inventories and autofill Anibis / Facebook Marketplace listing forms. Syncs end-to-end encrypted data; keys never leave this device.",
   "action": {
     "default_popup": "popup.html",
@@ -11,6 +11,7 @@
     "service_worker": "background.js"
   },
   "permissions": ["storage", "unlimitedStorage", "activeTab", "clipboardRead"],
+  "host_permissions": ["https://api.anthropic.com/*"],
   "content_scripts": [
     {
       "matches": ["https://www.anibis.ch/*", "https://anibis.ch/*"],

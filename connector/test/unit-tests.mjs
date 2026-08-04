@@ -18,15 +18,20 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import * as Y from 'yjs';
 import {
+  AI_MODEL,
+  ANTHROPIC_URL,
+  aiPickOption,
   buildListingPayload,
   buildProfile,
   bytesToBase64Url,
   decryptOuterDoc,
   decryptPhoto,
+  draftListing,
   importContentKey,
   isListingPayload,
   itemTitle,
   matchesQuery,
+  parseAiKeyInput,
   parseProfileLink,
   readInventory,
   syncToken,
@@ -237,6 +242,110 @@ await test('search matches name/brand/category/tags across inventories', () => {
   assert.equal(matchesQuery(drill, 'Garage', 'workshop'), true); // tag
   assert.equal(matchesQuery(drill, 'Garage', 'garage'), true); // inventory name
   assert.equal(matchesQuery(drill, 'Garage', 'lamp'), false);
+});
+
+/* ---------- 3b. listing language (template boilerplate) ---------- */
+
+await test('template boilerplate is localized (FR default flavor, DE, IT)', () => {
+  const drill = materialized.items.find((i) => i.id === 'ItemDrill1');
+  const fr = buildListingPayload(drill, 'fr');
+  assert.equal(fr.item.language, 'fr');
+  assert.equal(fr.item.aiDrafted, false);
+  assert.ok(fr.item.description.includes('Marque / modèle: Bosch GSR 18V'));
+  assert.ok(fr.item.description.includes('Numéro de série enregistré'));
+  assert.ok(fr.item.description.includes('Vendu comme sur les photos'));
+  const de = buildListingPayload(drill, 'de');
+  assert.ok(de.item.description.includes('Marke / Modell: Bosch GSR 18V'));
+  assert.ok(de.item.description.includes('Seriennummer registriert'));
+  const it = buildListingPayload(drill, 'it');
+  assert.ok(it.item.description.includes('Marca / modello: Bosch GSR 18V'));
+  // Item data itself is untouched — only the fixed strings are translated.
+  assert.ok(fr.item.description.includes('Cordless drill 18V'));
+});
+
+/* ---------- 3c. AI plumbing (mocked fetch — never a real API) ---------- */
+
+await test('AI key input accepts raw keys and the app inv-ai: QR format', () => {
+  assert.equal(parseAiKeyInput('sk-ant-api03-abcdefghijklmnop'), 'sk-ant-api03-abcdefghijklmnop');
+  assert.equal(parseAiKeyInput('  inv-ai:sk-ant-api03-abcdefghijklmnop '), 'sk-ant-api03-abcdefghijklmnop');
+  assert.equal(parseAiKeyInput('inv-ai:short'), null);
+  assert.equal(parseAiKeyInput('not a key at all'), null);
+  assert.equal(parseAiKeyInput(''), null);
+});
+
+function mockFetch(handler) {
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    const req = { url, init, body: JSON.parse(init.body) };
+    calls.push(req);
+    const out = handler(req);
+    return { ok: true, status: 200, json: async () => out };
+  };
+  return { fetchFn, calls };
+}
+
+const anthropicText = (text) => ({ content: [{ type: 'text', text }] });
+
+await test('draftListing: tiny anthropic request, language + facts in prompt, fenced JSON parsed', async () => {
+  const drill = materialized.items.find((i) => i.id === 'ItemDrill1');
+  const { fetchFn, calls } = mockFetch(() =>
+    anthropicText('```json\n{"title":"Perceuse Bosch 18V","description":"Copie IA.\\nPrix neuf: 300 CHF"}\n```'),
+  );
+  const draft = await draftListing(drill, { amount: 125, currency: 'CHF' }, 'fr', 'sk-test', {
+    fetchFn,
+  });
+  assert.equal(draft.title, 'Perceuse Bosch 18V');
+  assert.equal(draft.description, 'Copie IA.\nPrix neuf: 300 CHF');
+  assert.equal(calls.length, 1);
+  const req = calls[0];
+  assert.equal(req.url, ANTHROPIC_URL);
+  assert.equal(req.init.headers['x-api-key'], 'sk-test');
+  assert.equal(req.init.headers['anthropic-dangerous-direct-browser-access'], 'true');
+  assert.equal(req.body.model, AI_MODEL);
+  assert.ok(req.body.max_tokens <= 400, 'small max_tokens (user pays per token)');
+  const prompt = req.body.messages[0].content;
+  assert.ok(prompt.includes('French'), 'selected language in the prompt');
+  assert.ok(prompt.includes('Bosch GSR 18V'), 'brand fact in the prompt');
+  assert.ok(prompt.includes('Asking price: 125 CHF'), 'price fact in the prompt');
+  assert.ok(!prompt.includes('SN-SECRET'), 'serial number never reaches the AI');
+});
+
+await test('draftListing throws on HTTP error / bad JSON (caller keeps the template)', async () => {
+  const drill = materialized.items.find((i) => i.id === 'ItemDrill1');
+  const failFetch = async () => ({ ok: false, status: 401, json: async () => ({}) });
+  await assert.rejects(() =>
+    draftListing(drill, null, 'fr', 'sk-test', { fetchFn: failFetch }),
+  );
+  const { fetchFn } = mockFetch(() => anthropicText('sorry, no JSON here'));
+  await assert.rejects(() => draftListing(drill, null, 'fr', 'sk-test', { fetchFn }));
+});
+
+await test('aiPickOption: numbered options in prompt, 1-based answer -> 0-based index', async () => {
+  const { fetchFn, calls } = mockFetch(() => anthropicText(' 2 '));
+  const idx = await aiPickOption(
+    ['Informatique', 'Maison', 'TV & Audio'],
+    { title: 'Lampe à lave', category: 'Weird stuff' },
+    'sk-test',
+    { fetchFn },
+  );
+  assert.equal(idx, 1);
+  const prompt = calls[0].body.messages[0].content;
+  assert.ok(prompt.includes('1. Informatique') && prompt.includes('3. TV & Audio'));
+  assert.ok(prompt.includes('Lampe à lave'));
+  assert.ok(calls[0].body.max_tokens <= 16, 'number-only answer, tiny max_tokens');
+});
+
+await test('aiPickOption: "0" and out-of-range answers mean "unsure" (null)', async () => {
+  const zero = mockFetch(() => anthropicText('0'));
+  assert.equal(
+    await aiPickOption(['A', 'B'], { title: 'x' }, 'sk-test', { fetchFn: zero.fetchFn }),
+    null,
+  );
+  const big = mockFetch(() => anthropicText('99'));
+  assert.equal(
+    await aiPickOption(['A', 'B'], { title: 'x' }, 'sk-test', { fetchFn: big.fetchFn }),
+    null,
+  );
 });
 
 /* ---------- 4. encrypted photo round-trip ---------- */

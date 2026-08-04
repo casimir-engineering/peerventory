@@ -12,7 +12,7 @@
         color: #f2f2f7;
       }
       h1 { font-size: 15px; margin: 0 0 10px; }
-      textarea, input[type='text'], input[type='search'] {
+      textarea, input[type='text'], input[type='search'], select {
         width: 100%;
         box-sizing: border-box;
         background: #2c2c2e;
@@ -78,7 +78,9 @@
       .item .actions button { padding: 4px 8px; font-size: 12px; background: #48484a; }
       .empty { color: #8e8e93; padding: 14px 4px; text-align: center; }
       details { margin-top: 10px; color: #8e8e93; }
-      details textarea { margin-top: 8px; }
+      details textarea, details input[type='text'] { margin-top: 8px; }
+      details select { width: auto; flex: 1; }
+      details .row label { flex: none; color: #f2f2f7; }
       summary { cursor: pointer; }
       .dropzone {
         margin-top: 10px;
@@ -132,6 +134,37 @@
       <input type="search" id="search" placeholder="Search items (name, brand, category, tags…)" />
       <div id="counts"></div>
       <div id="results"></div>
+      <details>
+        <summary>Settings — listing language &amp; AI</summary>
+        <div class="row">
+          <label for="lang">Listing language</label>
+          <select id="lang">
+            <option value="fr">Français</option>
+            <option value="de">Deutsch</option>
+            <option value="it">Italiano</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <p class="hint">
+          Generated titles and descriptions (template boilerplate, and the full text when an
+          AI is linked) are written in this language.
+        </p>
+        <div id="ai-linked" class="hint" hidden></div>
+        <input type="text" id="ai-key" placeholder="Paste a Claude API key (sk-ant-…) or an inv-ai: link" />
+        <div class="row">
+          <button id="ai-save" class="primary">Link AI</button>
+          <button id="ai-qr-btn" title="Decode the key from the app's AI-key QR screenshot">Key QR image…</button>
+          <button id="ai-clear">Unlink</button>
+        </div>
+        <input type="file" id="ai-qr" accept="image/*" hidden />
+        <div id="ai-status" class="status"></div>
+        <p class="hint">
+          With an AI linked, <b>Sell on X</b> drafts the title and description in your language
+          and picks the Anibis category intelligently (overlay says “AI-drafted” — always
+          review). Without one, the template fill is used. The key is stored only in this
+          browser and sent only to api.anthropic.com — it is never part of the profile sync.
+        </p>
+      </details>
       <details>
         <summary>Paste a listing payload from the app (AI-drafted copy)</summary>
         <textarea id="payload" placeholder='JSON from the app’s Sell dialog → "Copy for extension"'></textarea>

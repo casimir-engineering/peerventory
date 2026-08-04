@@ -1,8 +1,8 @@
 /**
- * Builds the extension popup bundle (Yjs + Hocuspocus provider + WebCrypto
- * glue) into chrome-extension/popup.js, so `chrome-extension/` stays the
- * folder you load unpacked. The content scripts and manifest are plain files
- * and need no build.
+ * Builds the extension bundles (popup, scan page, background worker) into
+ * chrome-extension/, so `chrome-extension/` stays the folder you load
+ * unpacked. The content scripts and manifest are plain files and need no
+ * build.
  *
  * Also emits test/.tmp/core.mjs, a Node-consumable ESM bundle of the pure
  * logic (backup decode, decryption, materialization, listing payload) used
@@ -16,7 +16,11 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 await build({
-  entryPoints: [join(HERE, 'src', 'popup.ts'), join(HERE, 'src', 'scan.ts')],
+  entryPoints: [
+    join(HERE, 'src', 'popup.ts'),
+    join(HERE, 'src', 'scan.ts'),
+    join(HERE, 'src', 'background.ts'),
+  ],
   outdir: join(HERE, 'chrome-extension'),
   bundle: true,
   format: 'iife',

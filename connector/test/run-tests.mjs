@@ -171,10 +171,53 @@ const routes = {
   '/dist/fixture-facebook.js': ['dist/fixture-facebook.js', 'text/javascript'],
 };
 
+/**
+ * Mocked Anthropic /v1/messages (api.anthropic.com is host-resolver-mapped
+ * onto this server, so the extension's real fetch path is exercised without
+ * ever calling the real API). Tiny max_tokens = a category pick: answer the
+ * number of the "Maison"/"Luminaires" option scraped into the prompt (or 0).
+ * Anything else = a listing draft: answer fixed FR copy.
+ */
+function mockAnthropic(req, res) {
+  let raw = '';
+  req.on('data', (chunk) => (raw += chunk));
+  req.on('end', () => {
+    let text = '0';
+    try {
+      const body = JSON.parse(raw);
+      const prompt = body.messages[0].content;
+      if (body.max_tokens <= 16) {
+        const options = [...prompt.matchAll(/^(\d+)\. (.*)$/gm)];
+        const hit =
+          options.find(([, , label]) => /luminaires/i.test(label)) ||
+          options.find(([, , label]) => /^maison/i.test(label.trim()));
+        text = hit ? hit[1] : '0';
+      } else {
+        text = JSON.stringify({
+          title: 'Titre IA — Lampe vintage',
+          description: 'Description IA en français.\nPrix indicatif conservé.',
+        });
+      }
+    } catch {
+      // malformed body: keep '0'
+    }
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'access-control-allow-origin': '*',
+    });
+    res.end(JSON.stringify({ content: [{ type: 'text', text }] }));
+  });
+}
+
 const server = createServer(
   { key: readFileSync(join(TMP, 'key.pem')), cert: readFileSync(join(TMP, 'cert.pem')) },
   (req, res) => {
-    const route = routes[new URL(req.url, 'https://x').pathname];
+    const pathname = new URL(req.url, 'https://x').pathname;
+    if (pathname === '/v1/messages') {
+      mockAnthropic(req, res);
+      return;
+    }
+    const route = routes[pathname];
     if (!route || !existsSync(join(HERE, route[0]))) {
       res.writeHead(404).end('not found');
       return;
@@ -196,7 +239,7 @@ const context = await chromium.launchPersistentContext(join(TMP, 'profile'), {
   args: [
     `--disable-extensions-except=${EXT}`,
     `--load-extension=${EXT}`,
-    `--host-resolver-rules=MAP www.anibis.ch 127.0.0.1:${PORT}, MAP www.facebook.com 127.0.0.1:${PORT}`,
+    `--host-resolver-rules=MAP www.anibis.ch 127.0.0.1:${PORT}, MAP www.facebook.com 127.0.0.1:${PORT}, MAP api.anthropic.com 127.0.0.1:${PORT}`,
     '--ignore-certificate-errors',
     // Fake camera for the scan-page smoke test (green test pattern).
     '--use-fake-ui-for-media-stream',
@@ -353,10 +396,17 @@ try {
     (await anibis.inputValue('select[name="condition"]')) === 'good',
   );
   const desc = await anibis.inputValue('textarea[name="body"]');
-  check('description is the template draft', desc.includes('Brand / model: Bosch GSR 18V'));
+  check(
+    'description is the template draft, FR boilerplate by default',
+    desc.includes('Marque / modèle: Bosch GSR 18V'),
+  );
   check(
     'serial presence mentioned, number never present',
-    desc.includes('Serial number on record') && !desc.includes('SN-'),
+    desc.includes('Numéro de série enregistré') && !desc.includes('SN-'),
+  );
+  check(
+    'overlay says template fill in French (no AI linked)',
+    (await anibis.locator('#pv-fill-overlay').textContent()).includes('Template fill (French)'),
   );
   check(
     'staged photos attached to the file input (DataTransfer)',
@@ -526,6 +576,67 @@ try {
     (await anibis.locator('#photo-count').textContent()) === '0/5 photos',
     await anibis.locator('#photo-count').textContent(),
   );
+
+  /* Listing language: template boilerplate follows the setting ----------- */
+
+  console.log('\nListing language (template, no AI):');
+  await popup.evaluate(() => chrome.storage.local.set({ 'pv:ai': { lang: 'de' } }));
+  await anibis.reload();
+  await anibis.bringToFront();
+  await popup.evaluate(() => {
+    document.querySelector('[data-item-id="ItemDrill1"] [data-sell="anibis"]').click();
+  });
+  await anibis.waitForFunction(
+    () => document.querySelector('input[name="subject"]')?.value,
+    null,
+    { timeout: 20_000 },
+  );
+  check(
+    'German setting produces German template boilerplate',
+    (await anibis.inputValue('textarea[name="body"]')).includes('Marke / Modell: Bosch GSR 18V'),
+  );
+  check(
+    'overlay names the language (Template fill (German))',
+    (await anibis.locator('#pv-fill-overlay').textContent()).includes('Template fill (German)'),
+  );
+
+  /* AI-assisted fill (mocked Anthropic via host mapping) ------------------ */
+
+  console.log('\nAI-assisted fill (Anthropic mocked — no real API):');
+  await popup.evaluate(() =>
+    chrome.storage.local.set({ 'pv:ai': { lang: 'fr', key: 'sk-ant-test-00000000000000' } }),
+  );
+  await anibis.reload();
+  await anibis.bringToFront();
+  // "Weird stuff" maps to nothing in the synonyms table (proven above) —
+  // with an AI linked, the scraped menu levels go to the model and the
+  // category must be picked anyway, and title/description come AI-drafted.
+  await popup.evaluate(() => {
+    document.querySelector('[data-item-id="ItemLamp11"] [data-sell="anibis"]').click();
+  });
+  await anibis.waitForFunction(
+    () => document.querySelector('input[name="subject"]')?.value,
+    null,
+    { timeout: 20_000 },
+  );
+  check(
+    'AI picks the category for a synonyms-unmappable item (Maison › Luminaires)',
+    (await anibis.locator('#category-name').textContent()) === 'Maison › Luminaires',
+    await anibis.locator('#category-name').textContent(),
+  );
+  check(
+    'title is the AI draft',
+    (await anibis.inputValue('input[name="subject"]')) === 'Titre IA — Lampe vintage',
+    await anibis.inputValue('input[name="subject"]'),
+  );
+  check(
+    'description is the AI draft',
+    (await anibis.inputValue('textarea[name="body"]')).includes('Description IA en français'),
+  );
+  const aiOverlay = await anibis.locator('#pv-fill-overlay').textContent();
+  check('overlay says AI-drafted in French', aiOverlay.includes('AI-drafted in French'));
+  check('overlay marks the category as AI-picked', aiOverlay.includes('AI-picked'));
+  await popup.evaluate(() => chrome.storage.local.remove('pv:ai'));
 
   /* Wrong-page guard ---------------------------------------------------- */
 

@@ -369,6 +369,18 @@
       )
       .join('');
 
+    // Provenance: say whether the copy came from an AI or the template, so
+    // the user knows how carefully to proof-read before publishing.
+    const LANG_NAMES = { fr: 'French', de: 'German', it: 'Italian', en: 'English' };
+    const langName = LANG_NAMES[payload.item.language] || payload.item.language || '';
+    const provenance = payload.item.aiDrafted
+      ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a3a3c;color:#bf5af2">` +
+        `🤖 AI-drafted${langName ? ` in ${esc(langName)}` : ''} — review before publishing.</div>`
+      : payload.item.language
+        ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #3a3a3c;color:#8e8e93">` +
+          `Template fill${langName ? ` (${esc(langName)})` : ''} — link an AI in the popup for smarter copy.</div>`
+        : '';
+
     // The photos line: covered by its own result row when the fill attached
     // (or tried to attach) staged photos; otherwise fall back to the payload's
     // manual instructions.
@@ -383,6 +395,7 @@
       `<b>Peerventory → ${esc(siteLabel)}</b>` +
       `<button id="pv-overlay-close" style="all:unset;cursor:pointer;color:#8e8e93;font-size:16px;padding:2px 6px">✕</button></div>` +
       rows +
+      provenance +
       footer;
 
     document.documentElement.appendChild(box);

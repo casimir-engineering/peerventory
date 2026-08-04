@@ -5,7 +5,15 @@
  * extension's own IndexedDB (blobs can't live in chrome.storage).
  */
 
-import type { CacheMap, CachedInventory, ListingPayload, Profile, StagedPhotos } from './types';
+import { isListingLang } from './ai';
+import type {
+  AiSettings,
+  CacheMap,
+  CachedInventory,
+  ListingPayload,
+  Profile,
+  StagedPhotos,
+} from './types';
 
 export const PROFILE_KEY = 'pv:profile';
 export const CACHE_KEY = 'pv:cache';
@@ -15,6 +23,9 @@ export const PAYLOAD_KEY = 'pv:payload';
 export const PENDING_KEY = 'pv:pending';
 /** Decrypted photos (base64) staged for the content scripts to attach. */
 export const PHOTOS_KEY = 'pv:photos';
+/** Listing language + optional Anthropic key ("Link AI"). Read by the popup
+ * and the background worker (category picks). Never leaves this browser. */
+export const AI_KEY = 'pv:ai';
 
 export async function getProfile(): Promise<Profile | null> {
   const data = await chrome.storage.local.get(PROFILE_KEY);
@@ -50,9 +61,29 @@ export async function setStagedPhotos(staged: StagedPhotos | null): Promise<void
   else await chrome.storage.local.remove(PHOTOS_KEY);
 }
 
-/** Forget everything: profile, caches, payload, staged photos, thumbnails. */
+export async function getAiSettings(): Promise<AiSettings> {
+  const data = await chrome.storage.local.get(AI_KEY);
+  const raw = (data[AI_KEY] ?? {}) as Partial<AiSettings>;
+  return {
+    lang: isListingLang(raw.lang) ? raw.lang : 'fr',
+    ...(typeof raw.key === 'string' && raw.key ? { key: raw.key } : {}),
+  };
+}
+
+export async function setAiSettings(settings: AiSettings): Promise<void> {
+  await chrome.storage.local.set({ [AI_KEY]: settings });
+}
+
+/** Forget everything: profile, caches, payload, staged photos, AI key, thumbnails. */
 export async function clearAll(): Promise<void> {
-  await chrome.storage.local.remove([PROFILE_KEY, CACHE_KEY, PAYLOAD_KEY, PENDING_KEY, PHOTOS_KEY]);
+  await chrome.storage.local.remove([
+    PROFILE_KEY,
+    CACHE_KEY,
+    PAYLOAD_KEY,
+    PENDING_KEY,
+    PHOTOS_KEY,
+    AI_KEY,
+  ]);
   await new Promise<void>((resolve) => {
     const req = indexedDB.deleteDatabase(PHOTO_DB);
     req.onsuccess = req.onerror = req.onblocked = () => resolve();

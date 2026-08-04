@@ -1,12 +1,14 @@
 /**
  * Template listing draft: ExtItem -> listing payload v1 (the contract the
  * content scripts consume — see connector/README.md). Port of the template
- * path of app/src/ui/lib/listing.ts; the AI-drafted path stays in the app
- * (the popup's "paste listing payload" box accepts app-drafted payloads,
- * which override this template).
+ * path of app/src/ui/lib/listing.ts, with the fixed boilerplate strings
+ * localized per listing language (popup setting, default FR — Anibis is
+ * Swiss). The AI path (src/ai.ts) overrides title + description when a key
+ * is linked; the popup's "paste listing payload" box still accepts
+ * app-drafted payloads, which override this template entirely.
  */
 
-import type { ExtItem, ListingPayload, ListingPayloadItem, MoneyValue } from './types';
+import type { ExtItem, ListingLang, ListingPayload, ListingPayloadItem, MoneyValue } from './types';
 
 /** Classifieds prices look better rounded; keep cents only under 20. */
 function roundPrice(amount: number): number {
@@ -36,34 +38,90 @@ export function itemTitle(item: ExtItem): string {
   return title.length > 60 ? `${title.slice(0, 57).trimEnd()}…` : title;
 }
 
-function templateDescription(item: ExtItem): string {
+/** Fixed template boilerplate per listing language. The item data itself
+ * (description, notes) stays in whatever language the user wrote it in —
+ * only the AI path can translate that. */
+const TEMPLATE_STRINGS: Record<
+  ListingLang,
+  {
+    brand: string;
+    condition: string;
+    dimensions: string;
+    weight: string;
+    priceNew: string;
+    serial: string;
+    closing: string;
+  }
+> = {
+  en: {
+    brand: 'Brand / model',
+    condition: 'Condition',
+    dimensions: 'Dimensions',
+    weight: 'Weight',
+    priceNew: 'Price when new',
+    serial: 'Serial number on record (proof of ownership available).',
+    closing: 'Sold as pictured. Pick-up or shipped, message me!',
+  },
+  fr: {
+    brand: 'Marque / modèle',
+    condition: 'État',
+    dimensions: 'Dimensions',
+    weight: 'Poids',
+    priceNew: 'Prix neuf',
+    serial: 'Numéro de série enregistré (preuve de propriété disponible).',
+    closing: 'Vendu comme sur les photos. Remise en main propre ou envoi — écrivez-moi !',
+  },
+  de: {
+    brand: 'Marke / Modell',
+    condition: 'Zustand',
+    dimensions: 'Abmessungen',
+    weight: 'Gewicht',
+    priceNew: 'Neupreis',
+    serial: 'Seriennummer registriert (Eigentumsnachweis vorhanden).',
+    closing: 'Verkauf wie abgebildet. Abholung oder Versand — schreiben Sie mir!',
+  },
+  it: {
+    brand: 'Marca / modello',
+    condition: 'Stato',
+    dimensions: 'Dimensioni',
+    weight: 'Peso',
+    priceNew: 'Prezzo da nuovo',
+    serial: 'Numero di serie registrato (prova di proprietà disponibile).',
+    closing: 'Venduto come in foto. Ritiro o spedizione — scrivetemi!',
+  },
+};
+
+function templateDescription(item: ExtItem, lang: ListingLang): string {
+  const t = TEMPLATE_STRINGS[lang];
   const lines: string[] = [];
   const desc = (item.description ?? '').trim();
   if (desc) lines.push(desc);
-  if (item.brandModel) lines.push(`Brand / model: ${item.brandModel}`);
-  if (item.condition) lines.push(`Condition: ${item.condition}`);
+  if (item.brandModel) lines.push(`${t.brand}: ${item.brandModel}`);
+  if (item.condition) lines.push(`${t.condition}: ${item.condition}`);
   if (item.dimensionsMm) {
     const mm = item.dimensionsMm;
-    lines.push(`Dimensions: ${mm.l} × ${mm.w} × ${mm.h} mm`);
+    lines.push(`${t.dimensions}: ${mm.l} × ${mm.w} × ${mm.h} mm`);
   }
   if (item.weightGrams) {
     const g = item.weightGrams;
-    lines.push(`Weight: ${g < 1000 ? `${g} g` : `${(g / 1000).toFixed(1)} kg`}`);
+    lines.push(`${t.weight}: ${g < 1000 ? `${g} g` : `${(g / 1000).toFixed(1)} kg`}`);
   }
   if (item.valueNew && Number.isFinite(item.valueNew.amount)) {
-    lines.push(`Price when new: ${item.valueNew.amount} ${item.valueNew.currency}`);
+    lines.push(`${t.priceNew}: ${item.valueNew.amount} ${item.valueNew.currency}`);
   }
-  if (item.serialIncluded) lines.push('Serial number on record (proof of ownership available).');
+  if (item.serialIncluded) lines.push(t.serial);
   if (item.notes) lines.push(item.notes.trim());
-  lines.push('Sold as pictured. Pick-up or shipped, message me!');
+  lines.push(t.closing);
   return lines.join('\n');
 }
 
-export function buildListingPayload(item: ExtItem): ListingPayload {
+export function buildListingPayload(item: ExtItem, lang: ListingLang = 'en'): ListingPayload {
   const price = suggestPrice(item);
   const payloadItem: ListingPayloadItem = {
     title: itemTitle(item),
-    description: templateDescription(item),
+    description: templateDescription(item, lang),
+    language: lang,
+    aiDrafted: false,
     priceAmount: price?.amount ?? 0,
     priceCurrency: (price?.currency ?? 'CHF').toUpperCase(),
     ...(item.condition ? { condition: item.condition } : {}),

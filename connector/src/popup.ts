@@ -7,15 +7,18 @@
  * only ever sent to the relay the profile link points at.
  */
 
-import { buildListingPayload, isListingPayload, itemTitle, matchesQuery } from './listing';
+import { LANG_NAMES, draftListing, isListingLang, maskKey, parseAiKeyInput } from './ai';
+import { buildListingPayload, isListingPayload, itemTitle, matchesQuery, suggestPrice } from './listing';
 import { connectedMessage, importProfileText } from './onboard';
 import { createFetchQueue, fetchPhotoBlob } from './photos';
 import { decodeQrImage } from './qr';
 import {
   clearAll,
+  getAiSettings,
   getCache,
   getProfile,
   putCachedInventory,
+  setAiSettings,
   setPayload,
   setPendingFill,
   setStagedPhotos,
@@ -330,7 +333,24 @@ async function stagePhotos(item: ExtItem): Promise<number> {
 
 async function sellItem(item: ExtItem, site: SiteId): Promise<void> {
   const status = $('status');
-  const payload = buildListingPayload(item);
+  const ai = await getAiSettings();
+  const payload = buildListingPayload(item, ai.lang);
+  let aiNote = '';
+  if (ai.key) {
+    // AI draft with a hard timeout (in draftListing) — a Sell click must
+    // never hang; on any failure the localized template above stands.
+    setStatus(status, `AI drafting in ${LANG_NAMES[ai.lang]}…`);
+    try {
+      const draft = await draftListing(item, suggestPrice(item), ai.lang, ai.key);
+      payload.item.title = draft.title;
+      payload.item.description = draft.description;
+      payload.item.aiDrafted = true;
+      delete payload.item.descriptionTranslations;
+      aiNote = ` AI-drafted in ${LANG_NAMES[ai.lang]}.`;
+    } catch {
+      aiNote = ' (AI draft failed — template used.)';
+    }
+  }
   await setPayload(payload);
   if (item.photos.length > 0) setStatus(status, `Decrypting ${item.photos.length} photo(s)…`);
   const staged = await stagePhotos(item);
@@ -341,7 +361,7 @@ async function sellItem(item: ExtItem, site: SiteId): Promise<void> {
     const res = await sendFill(active.tabId);
     if (res?.ok) {
       const filled = res.results?.filter((r) => r.status === 'filled').length ?? 0;
-      setStatus(status, `${SITES[site].label}: ${filled} field(s) filled — check the overlay on the page.`, 'ok');
+      setStatus(status, `${SITES[site].label}: ${filled} field(s) filled — check the overlay on the page.${aiNote}`, 'ok');
       return;
     }
     if (res && res.error !== 'not-listing-page') {
@@ -352,7 +372,7 @@ async function sellItem(item: ExtItem, site: SiteId): Promise<void> {
   }
   await setPendingFill(site);
   await chrome.tabs.create({ url: SITES[site].createUrl });
-  setStatus(status, `Opened ${SITES[site].label} — the form fills itself once it loads.${photoNote}`, 'ok');
+  setStatus(status, `Opened ${SITES[site].label} — the form fills itself once it loads.${photoNote}${aiNote}`, 'ok');
 }
 
 async function usePastedPayload(text: string): Promise<boolean> {
@@ -419,6 +439,65 @@ async function downloadItemPhotos(item: ExtItem): Promise<void> {
       : 'No photos could be fetched (offline or blob missing).',
     saved > 0 ? 'ok' : 'err',
   );
+}
+
+/* ---------------------------------------------------------------- */
+/* Settings: listing language + "Link AI"                            */
+/* ---------------------------------------------------------------- */
+
+async function renderAiSettings(): Promise<void> {
+  const ai = await getAiSettings();
+  $<HTMLSelectElement>('lang').value = ai.lang;
+  const linked = $('ai-linked');
+  linked.hidden = !ai.key;
+  if (ai.key) linked.textContent = `AI linked: ${maskKey(ai.key)} (Anthropic, direct from this browser).`;
+  $<HTMLButtonElement>('ai-clear').hidden = !ai.key;
+}
+
+async function saveAiKeyText(text: string): Promise<void> {
+  const status = $('ai-status');
+  const key = parseAiKeyInput(text);
+  if (!key) {
+    setStatus(status, 'Not an API key — paste the sk-ant-… key or the app’s inv-ai: link.', 'err');
+    return;
+  }
+  const ai = await getAiSettings();
+  await setAiSettings({ ...ai, key });
+  $<HTMLInputElement>('ai-key').value = '';
+  setStatus(status, 'AI linked — Sell now drafts the listing text and picks categories.', 'ok');
+  await renderAiSettings();
+}
+
+function wireSettings(): void {
+  $('lang').addEventListener('change', async () => {
+    const value = $<HTMLSelectElement>('lang').value;
+    const ai = await getAiSettings();
+    await setAiSettings({ ...ai, lang: isListingLang(value) ? value : 'fr' });
+  });
+  $('ai-save').addEventListener('click', () => {
+    void saveAiKeyText($<HTMLInputElement>('ai-key').value);
+  });
+  const qrInput = $<HTMLInputElement>('ai-qr');
+  $('ai-qr-btn').addEventListener('click', () => qrInput.click());
+  qrInput.addEventListener('change', async () => {
+    const file = qrInput.files?.[0];
+    qrInput.value = '';
+    if (!file) return;
+    setStatus($('ai-status'), 'Reading QR…');
+    const text = await decodeQrImage(file);
+    if (!text) {
+      setStatus($('ai-status'), 'No QR code found in that image.', 'err');
+      return;
+    }
+    await saveAiKeyText(text);
+  });
+  $('ai-clear').addEventListener('click', async () => {
+    const ai = await getAiSettings();
+    delete ai.key;
+    await setAiSettings(ai);
+    setStatus($('ai-status'), 'AI unlinked — the template fill is used again.', 'ok');
+    await renderAiSettings();
+  });
 }
 
 /* ---------------------------------------------------------------- */
@@ -541,6 +620,7 @@ async function showMain(): Promise<void> {
   cache = await getCache();
   render();
   void renderSiteBanner();
+  void renderAiSettings();
   $<HTMLInputElement>('search').focus();
 }
 
@@ -548,7 +628,7 @@ function wireMain(): void {
   $('search').addEventListener('input', render);
   $('refresh').addEventListener('click', () => void refreshAll());
   $('disconnect').addEventListener('click', async () => {
-    if (!confirm('Forget this profile, all synced items and cached photos on this browser?')) return;
+    if (!confirm('Forget this profile, all synced items, cached photos and the linked AI key on this browser?')) return;
     await clearAll();
     profile = null;
     cache = {};
@@ -590,6 +670,7 @@ function wireMain(): void {
 async function init(): Promise<void> {
   wireOnboarding();
   wireMain();
+  wireSettings();
   profile = await getProfile();
   if (!profile) {
     showOnboarding();

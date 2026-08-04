@@ -57,11 +57,35 @@ Peerventory app                     Connector extension
   immediately. Otherwise the extension opens the listing form in a new tab
   and the content script fills it as soon as the form renders (one-shot
   `pv:pending` flag, expires after 2 minutes).
-- **Listing copy** — generated from the item by the same template the app
-  uses (title from brand+description, price from `valueCurrent` rounded, or
-  60% of `valueNew`). For AI-drafted copy, keep using the app's **Sell /
-  export listing** dialog and paste the payload into the popup's advanced
-  box — same fill path, and the Anthropic key stays in the app.
+- **Listing copy & language** — generated from the item by the same template
+  the app uses (title from brand+description, price from `valueCurrent`
+  rounded, or 60% of `valueNew`). The popup's **Settings — listing language
+  & AI** section selects the language of the generated content (Français /
+  Deutsch / Italiano / English, default **French** — Anibis is Swiss). The
+  template translates its fixed boilerplate ("Marque / modèle", "État",
+  closing line…) per language; the item's own description/notes stay as
+  written unless an AI is linked.
+- **Link AI (optional)** — paste an Anthropic API key (`sk-ant-…`) or the
+  app's `inv-ai:` key link, or decode the app's AI-key QR screenshot, in the
+  same Settings section. With a key linked, **Sell on X**:
+  - drafts the title and a well-structured description **in the selected
+    language** (prices/units preserved) with a tiny haiku-class prompt;
+  - on Anibis, sends each scraped level of the live category menu to the AI
+    (via the background worker) and clicks the option it names — this
+    overrides the synonyms heuristic, which remains the fallback;
+  - the on-page overlay says **"AI-drafted in French — review before
+    publishing"** (vs "Template fill") and "AI-picked" on the category row.
+
+  Every AI call has a 10 s timeout and any failure silently falls back to
+  the template / synonyms path — the fill never blocks on the AI. The key
+  lives only in `chrome.storage.local`, is sent only to `api.anthropic.com`
+  (the profile backup payload deliberately never carries it into the
+  extension — linking is a separate opt-in), and **Disconnect** wipes it.
+  Only Anthropic ships as a provider: Cursor's cloud API was evaluated and
+  skipped (the SDK needs a local Node bridge, and REST `/v1/agents` spins a
+  repo-cloning VM per request — seconds-to-minutes latency, wrong tool for
+  one-shot listing copy). The app's **Sell / export listing** dialog +
+  paste-payload box still works as before and overrides everything.
 
 ### Security model
 
@@ -119,11 +143,11 @@ sync.
 
 | Field | Anibis | Facebook Marketplace |
 | --- | --- | --- |
-| Title | autofilled | autofilled |
-| Description | autofilled (FR/DE translation matching page language, when present) | autofilled |
+| Title | autofilled (AI-drafted in the selected language when linked, template otherwise) | autofilled (same) |
+| Description | autofilled (AI-drafted in the selected language when linked; template with localized boilerplate otherwise; FR/DE translation matching page language for app-pasted payloads) | autofilled |
 | Price | autofilled (CHF warning if payload is another currency) | autofilled (number only; account currency assumed) |
 | Condition | autofilled when it is a native `<select>`; otherwise manual hint | manual hint (custom combobox) |
-| Category | **auto-picked**: the cascading MUI menu is scraped level by level and matched against the item's category (accent-insensitive + synonyms table in `content/anibis.js`); falls back to the manual hint when no option matches confidently | manual hint (custom combobox) |
+| Category | **auto-picked**: with an AI linked, each scraped menu level is decided by the model (overrides the heuristic); otherwise/on failure the cascading MUI menu is matched against the item's category (accent-insensitive + synonyms table in `content/anibis.js`); falls back to the manual hint when nothing matches confidently | manual hint (custom combobox) |
 | Photos | **auto-attached** (decrypted bytes → `File` → `DataTransfer` on the hidden file input, capped by the "x/5 photos" counter; verified live) | auto-attach via the same mechanism (capped at 10, **not verified against the live site**) |
 | Publish | manual, always | manual, always |
 
@@ -163,15 +187,19 @@ connector/
     materialize.ts              enc:log -> inner Y.Doc -> plain items
     sync.ts                     Hocuspocus read-only sync per inventory
     photos.ts                   blob fetch + decrypt + IndexedDB cache
-    listing.ts                  item -> listing payload v1 (template draft)
+    listing.ts                  item -> listing payload v1 (localized template draft)
+    ai.ts                       "Link AI": key parsing, Anthropic draft +
+                                category-pick prompts (10s timeout, haiku-class)
+    background.ts               service worker: PV_AI_AVAILABLE / PV_AI_CATEGORY
     qr.ts                       QR decode: BarcodeDetector + jsQR fallback
-    storage.ts                  chrome.storage.local keys + photo cache
+    storage.ts                  chrome.storage.local keys (incl. pv:ai) + photo cache
     core.ts                     barrel bundled for the Node tests
   chrome-extension/             ← load THIS folder unpacked (after npm run build)
-    manifest.json               MV3; storage, unlimitedStorage, activeTab, clipboardRead
+    manifest.json               MV3; storage, unlimitedStorage, activeTab,
+                                clipboardRead; host permission api.anthropic.com
     popup.html / popup.js       popup (popup.js is generated, gitignored)
     scan.html / scan.js         camera QR scan tab (scan.js generated)
-    background.js               empty service worker
+    background.js               generated from src/background.ts (gitignored)
     content/fill-core.js        field finder, React-safe setters, overlay,
                                 staged-photo attach, PV_PING/PV_FILL,
                                 pending autofill
@@ -195,8 +223,10 @@ npm test          # unit + relay integration + Chromium e2e
 ```
 
 - `npm run test:unit` — decodes a backup payload, decrypts an encrypted-doc
-  fixture (same wire format as the app), checks the listing-payload contract
-  and that serial numbers / AI keys never leak into the extension.
+  fixture (same wire format as the app), checks the listing-payload contract,
+  the localized template boilerplate, the AI prompt/response plumbing against
+  a mocked fetch (never a real API), and that serial numbers / profile-carried
+  AI keys never leak into the extension.
 - `npm run test:relay` — boots the real `server/` relay on a temp dir,
   publishes an encrypted doc through it and syncs it back with the shipped
   `syncInventory` using the read-only token.
@@ -206,7 +236,9 @@ npm test          # unit + relay integration + Chromium e2e
   automatic category pick (one- and two-level traversal, fuzzy word match,
   no-guess fallback) and staged-photo attach, the pending-autofill flow on
   the React-controlled Facebook fixture (incl. photo attach through React),
-  the app-payload paste path and the wrong-page guard.
+  the app-payload paste path, the wrong-page guard, the listing-language
+  templates, and the AI-assisted fill (api.anthropic.com is host-mapped to a
+  local mock — the real popup/background fetch paths run, no real API call).
 
 **Verified live** (logged-in anibis.ch, 2026-08): category auto-pick on the
 real MUI menu, field fill, automatic photo upload. **Not covered — needs a
