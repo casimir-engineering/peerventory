@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.local
+.env
+server/data/
+app/dev-dist/
+secrets/
+*.apk
+*.idsig
+*.tsbuildinfo

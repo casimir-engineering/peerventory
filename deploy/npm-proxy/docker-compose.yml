@@ -1,0 +1,21 @@
+# inventory — local-first inventory sync relay + PWA hosting.
+# Lives at /opt/stacks/inventory. No public ports: the existing reverse proxy
+# (e.g. Nginx Proxy Manager) forwards inventory.example.com -> inventory:8787
+# over the shared `edge` network (websockets on, TLS on the proxy).
+services:
+  inventory:
+    build: .
+    container_name: inventory
+    restart: unless-stopped
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+    volumes:
+      - ./data:/app/server/data
+    networks:
+      - edge
+    mem_limit: 512m
+
+networks:
+  edge:
+    external: true

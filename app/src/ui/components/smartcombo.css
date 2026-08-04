@@ -1,0 +1,83 @@
+/*
+ * SmartCombo dropdown, styled after .place-suggest in entry.css but imported
+ * with the component so every route that uses it gets the styles.
+ */
+
+.combo {
+  position: relative;
+  min-width: 0;
+}
+
+.combo .input {
+  width: 100%;
+}
+
+.combo-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.5);
+  text-transform: none;
+}
+
+.combo-menu li + li {
+  border-top: 1px solid var(--line);
+}
+
+.combo-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.combo-opt:hover,
+.combo-opt.active {
+  background: var(--surface-3);
+}
+
+.combo-code {
+  flex: none;
+  font-weight: 600;
+}
+
+.combo-name {
+  color: var(--muted);
+  font-size: 0.875rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The 88px currency box in a money row cannot hold readable names: anchor a
+   wider menu to its right edge instead. */
+.money .combo {
+  flex: none;
+  width: 88px;
+}
+
+.money .combo .combo-menu {
+  left: auto;
+  right: 0;
+  width: min(300px, 86vw);
+}

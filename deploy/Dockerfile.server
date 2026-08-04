@@ -1,0 +1,24 @@
+FROM node:26-bookworm-slim AS dependencies
+
+WORKDIR /app/server
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends g++ make python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY server/package.json server/package-lock.json ./
+RUN npm ci
+
+FROM node:26-bookworm-slim
+
+WORKDIR /app/server
+
+COPY --from=dependencies /app/server/node_modules ./node_modules
+COPY server/tsconfig.json ./
+COPY server/package.json ./
+COPY server/src ./src
+
+ENV NODE_ENV=production
+EXPOSE 8787
+
+CMD ["npm", "start"]

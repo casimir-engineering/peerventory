@@ -1,0 +1,32 @@
+{
+  "name": "inventory-server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "selftest": "tsx src/selftest.ts",
+    "selftest:ai": "tsx src/ai-selftest.ts",
+    "e2e": "tsx src/e2e-two-clients.ts",
+    "e2e:enc": "tsx src/e2e-encrypted.ts"
+  },
+  "dependencies": {
+    "@hocuspocus/extension-sqlite": "^4.4.0",
+    "@hocuspocus/server": "^4.4.0",
+    "better-sqlite3": "^12.11.1",
+    "express": "^5.2.1",
+    "ws": "^8.21.1",
+    "yjs": "^13.6.31"
+  },
+  "devDependencies": {
+    "@hocuspocus/provider": "^4.4.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.5",
+    "typescript": "^7.0.2"
+  }
+}

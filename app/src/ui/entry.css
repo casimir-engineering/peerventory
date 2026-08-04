@@ -1,0 +1,231 @@
+/*
+ * Item entry and item sheet, v2 controls: place autocomplete, currency hints,
+ * unit-aware measurements and the AI review panel. Uses the tokens defined in
+ * index.css; nothing here restyles an existing class.
+ */
+
+/* ------------------------------------------------------- place autocomplete */
+
+.place-input {
+  position: relative;
+}
+
+.place-suggest {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 264px;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.5);
+}
+
+.place-suggest li + li {
+  border-top: 1px solid var(--line);
+}
+
+.place-hit {
+  display: block;
+  width: 100%;
+  min-height: var(--tap);
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.9375rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.place-hit:hover,
+.place-hit:focus-visible {
+  background: var(--surface-3);
+}
+
+/* -------------------------------------------------- money and measurements */
+
+.field-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.warn-text {
+  color: var(--warn);
+}
+
+/* Inline "use the class that matches the measurement" fix. */
+.fix-btn {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.fix-btn:hover {
+  background: var(--surface-3);
+}
+
+/* --------------------------------------------------------------- ai panel */
+
+.ai-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ai-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: var(--tap);
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ai-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  margin: 3px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.ai-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ai-value {
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ ocr scanner */
+
+/* Serial input keeps flexing; the Scan button sits on the input line. */
+.serial-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.serial-row > .field {
+  flex: 1;
+  min-width: 0;
+}
+
+.serial-row > .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.ocr-scanner {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4 / 3;
+}
+
+.ocr-scanner video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ocr-scanner.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  background: var(--surface-2);
+}
+
+/* Keep in step with BAND in OcrScanner.tsx. */
+.ocr-band {
+  position: absolute;
+  inset: 36% 6%;
+  border-radius: 8px;
+  border: 2px solid rgb(255 255 255 / 0.75);
+  box-shadow: 0 0 0 999px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+}
+
+.ocr-status {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.55);
+  color: rgb(255 255 255 / 0.8);
+  font-size: 0.75rem;
+  font-weight: 550;
+}
+
+.ocr-candidates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ocr-chip {
+  min-height: 34px;
+  padding: 4px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.ocr-chip:hover,
+.ocr-chip:focus-visible {
+  background: var(--surface-3);
+}
+
+/* ---------------------------------------------------------------- owner */
+
+.owner-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
