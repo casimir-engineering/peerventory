@@ -6,9 +6,12 @@ import {
   inventoryToXlsx,
   inventoryToYaml,
   inventoryToZip,
+  shareOrDownloadFile,
 } from '../../export';
-import type { Id, InventorySnapshot } from '../../types';
+import { ensureRates } from '../../services/currency';
+import type { Id, InventorySnapshot, PhotoRef } from '../../types';
 import { safeFilename } from '../lib/format';
+import { makeExportThumb } from '../lib/image';
 import { Spinner } from './Common';
 import { useToast } from './Toast';
 
@@ -40,14 +43,23 @@ export function ExportButtons({
       const snapshot: InventorySnapshot = await snapshotInventory(docId);
       if (kind === 'yaml') {
         downloadText(inventoryToYaml(snapshot), `${base}.yaml`);
+        toast('Export ready');
       } else if (kind === 'xlsx') {
-        const blob = await inventoryToXlsx(snapshot, itemIds);
-        downloadBlob(blob, `${base}.xlsx`);
+        // Totals are converted to the inventory currency; make sure FX rates
+        // are cached (never throws, degrades to per-currency totals offline).
+        await ensureRates();
+        const loadPhoto = async (photo: PhotoRef) => {
+          const photoBlob = await getPhotoBlob(docId, photo.hash);
+          return photoBlob ? makeExportThumb(photoBlob) : null;
+        };
+        const blob = await inventoryToXlsx(snapshot, itemIds, loadPhoto);
+        const outcome = await shareOrDownloadFile(blob, `${base}.xlsx`, inventoryName);
+        toast(outcome === 'shared' ? 'Export shared' : 'Export downloaded');
       } else {
         const blob = await inventoryToZip(snapshot, (hash: string) => getPhotoBlob(docId, hash));
         downloadBlob(blob, `${base}.zip`);
+        toast('Export ready');
       }
-      toast('Export ready');
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Export failed');
     } finally {
