@@ -120,7 +120,7 @@ execFileSync('openssl', [
 ]);
 
 const routes = {
-  '/fr/publier': ['fixture-anibis.html', 'text/html; charset=utf-8'],
+  '/fr/listings/new': ['fixture-anibis.html', 'text/html; charset=utf-8'],
   '/marketplace/create/item': ['fixture-facebook.html', 'text/html; charset=utf-8'],
   '/dist/fixture-facebook.js': ['dist/fixture-facebook.js', 'text/javascript'],
 };
@@ -254,28 +254,36 @@ try {
 
   /* "Sell on Anibis" from an item row ---------------------------------- */
 
-  console.log('\nSell on Anibis (fixture at https://www.anibis.ch/fr/publier):');
+  console.log('\nSell on Anibis (fixture at https://www.anibis.ch/fr/listings/new):');
   const anibis = await context.newPage();
-  await anibis.goto('https://www.anibis.ch/fr/publier');
+  await anibis.goto('https://www.anibis.ch/fr/listings/new');
   await anibis.bringToFront();
   await popup.evaluate(() => {
     document.querySelector('[data-item-id="ItemDrill1"] [data-sell="anibis"]').click();
   });
+  // The fields are gated behind the category pick: the fill must wait and
+  // tell the user what to do instead of failing.
+  await anibis.waitForSelector('#pv-fill-overlay', { timeout: 10_000 });
+  check(
+    'waiting hint shown while the category is not picked yet',
+    (await anibis.locator('#pv-fill-overlay').textContent()).includes('catégorie'),
+  );
+  await anibis.click('#pick-category');
   await anibis.waitForFunction(
-    () => document.querySelector('input[name="title"]')?.value !== '',
+    () => document.querySelector('input[name="subject"]')?.value !== '',
     null,
     { timeout: 10_000 },
   );
   check(
     'title generated from item (brand + description)',
-    (await anibis.inputValue('input[name="title"]')) === 'Bosch GSR 18V — Cordless drill 18V',
+    (await anibis.inputValue('input[name="subject"]')) === 'Bosch GSR 18V — Cordless drill 18V',
   );
   check('price suggested from valueCurrent (rounded)', (await anibis.inputValue('input[name="price"]')) === '125');
   check(
     'condition select matched by option text',
     (await anibis.inputValue('select[name="condition"]')) === 'good',
   );
-  const desc = await anibis.inputValue('textarea[name="description"]');
+  const desc = await anibis.inputValue('textarea[name="body"]');
   check('description is the template draft', desc.includes('Brand / model: Bosch GSR 18V'));
   check(
     'serial presence mentioned, number never present',
@@ -325,18 +333,20 @@ try {
     document.querySelector('#payload').value = json;
     document.querySelector('#fill-page').click();
   }, JSON.stringify(payload));
+  await anibis.waitForSelector('#pv-fill-overlay', { timeout: 10_000 });
+  await anibis.click('#pick-category');
   await anibis.waitForFunction(
-    () => document.querySelector('input[name="title"]')?.value !== '',
+    () => document.querySelector('input[name="subject"]')?.value !== '',
     null,
     { timeout: 10_000 },
   );
   check(
     'pasted app payload fills the page (AI copy path)',
-    (await anibis.inputValue('input[name="title"]')) === payload.item.title,
+    (await anibis.inputValue('input[name="subject"]')) === payload.item.title,
   );
   check(
     'description uses the FR translation (page lang=fr)',
-    (await anibis.inputValue('textarea[name="description"]')) ===
+    (await anibis.inputValue('textarea[name="body"]')) ===
       payload.item.descriptionTranslations.fr,
   );
 

@@ -289,6 +289,25 @@
     box.querySelector('#pv-overlay-close').addEventListener('click', () => box.remove());
   }
 
+  /** Small variant of the overlay shown while waiting for the form to appear
+   * (e.g. Anibis only renders the fields after a category is picked). */
+  function showWaitingHint(siteLabel, hint) {
+    const prior = document.getElementById(OVERLAY_ID);
+    if (prior) prior.remove();
+    const box = document.createElement('div');
+    box.id = OVERLAY_ID;
+    box.style.cssText = [
+      'position:fixed', 'right:16px', 'bottom:16px', 'z-index:2147483647',
+      'max-width:340px', 'background:#1c1c1e', 'color:#f2f2f7', 'border-radius:12px',
+      'box-shadow:0 8px 30px rgba(0,0,0,.45)', 'padding:14px 16px',
+      'font:13px/1.45 -apple-system,Segoe UI,Roboto,sans-serif',
+    ].join(';');
+    box.innerHTML =
+      `<b>Peerventory → ${esc(siteLabel)}</b>` +
+      `<div style="margin-top:6px;color:#ff9f0a">✎ ${esc(hint)}</div>`;
+    document.documentElement.appendChild(box);
+  }
+
   /* ---------------------------------------------------------------- */
   /* Site bootstrap                                                     */
   /* ---------------------------------------------------------------- */
@@ -303,6 +322,10 @@
     );
   }
 
+  /** How long runFill waits for site.formReady() (a manual step like the
+   * Anibis category pick can gate the fields). */
+  const FORM_READY_TIMEOUT_MS = 90_000;
+
   /** One fill run: payload from storage -> fields -> overlay -> result object. */
   async function runFill(site) {
     if (!site.isListingPage()) {
@@ -312,6 +335,14 @@
     const payload = data[PAYLOAD_KEY];
     if (!validPayload(payload)) {
       return { ok: false, error: 'no-payload', site: site.label };
+    }
+    if (site.formReady && !site.formReady()) {
+      showWaitingHint(site.label, site.waitHint || 'Waiting for the listing form to appear…');
+      const deadline = Date.now() + FORM_READY_TIMEOUT_MS;
+      while (Date.now() < deadline && !site.formReady()) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      // On timeout, fall through: the fields report "not found" honestly.
     }
     try {
       const results = fillFields(site.buildFields(payload.item), payload.item);
@@ -350,7 +381,13 @@
   }
 
   /**
-   * site: { id, label, isListingPage() -> bool, buildFields(payloadItem) -> fields }
+   * site: {
+   *   id, label,
+   *   isListingPage() -> bool,
+   *   buildFields(payloadItem) -> fields,
+   *   formReady?() -> bool,   // fields exist (a manual step may gate them)
+   *   waitHint?: string       // shown while waiting for formReady()
+   * }
    * Wires the popup's PV_FILL message (and the pending-autofill flag) to the
    * fill run for this site.
    */

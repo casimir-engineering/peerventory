@@ -28,7 +28,7 @@ const SITES: Record<SiteId, { label: string; host: RegExp; createUrl: string }> 
   anibis: {
     label: 'Anibis',
     host: /(^|\.)anibis\.ch$/,
-    createUrl: 'https://www.anibis.ch/fr/publier',
+    createUrl: 'https://www.anibis.ch/fr/listings/new',
   },
   facebook: {
     label: 'Facebook Marketplace',

@@ -1,15 +1,21 @@
 <!doctype html>
 <!--
-  Local stand-in for the Anibis publish form (https://www.anibis.ch/fr/publier).
-  Plain (non-React) controls with French labels and name attributes, matching
-  the strategies content/anibis.js relies on: <label for>, name=, placeholder.
-  This mirrors typical structure, NOT the live page — a logged-in manual test
-  against the real form is still required.
+  Local stand-in for the Anibis new-listing form
+  (https://www.anibis.ch/fr/listings/new, verified live 2026-08).
+  Mirrors what content/anibis.js relies on:
+   - the detail fields only exist after a category is picked (a cascading
+     MUI menu on the real site — one button here), which exercises the
+     formReady() wait in fill-core;
+   - title is <input name="subject"> ("Titre *"), description is
+     <textarea name="body"> ("Description *"), price is a number input.
+  Plain (non-React) controls; the React fill path is covered by the
+  Facebook fixture. A logged-in manual test against the real form is still
+  the reference.
 -->
 <html lang="fr">
   <head>
     <meta charset="utf-8" />
-    <title>Publier une annonce — fixture</title>
+    <title>Insérer annonce — fixture</title>
     <style>
       body { font-family: sans-serif; max-width: 560px; margin: 40px auto; }
       label { display: block; margin: 14px 0 4px; font-weight: 600; }
@@ -17,30 +23,44 @@
     </style>
   </head>
   <body>
-    <h1>Publier une annonce</h1>
+    <h1>Insérer annonce</h1>
     <form>
-      <label for="ad-title">Titre de l'annonce</label>
-      <input id="ad-title" name="title" type="text" maxlength="60" />
-
-      <label for="ad-desc">Description</label>
-      <textarea id="ad-desc" name="description" rows="6" placeholder="Décrivez votre objet"></textarea>
-
-      <label for="ad-price">Prix (CHF)</label>
-      <input id="ad-price" name="price" type="text" inputmode="numeric" />
-
-      <label for="ad-condition">État</label>
-      <select id="ad-condition" name="condition">
-        <option value="">—</option>
-        <option value="new">Neuf</option>
-        <option value="like-new">Comme neuf</option>
-        <option value="good">Bon état</option>
-        <option value="used">Utilisé</option>
-      </select>
-
       <label>Catégorie</label>
-      <button type="button">Choisir une catégorie…</button>
+      <button id="pick-category" type="button">Choisir une catégorie</button>
+      <span id="category-name"></span>
+
+      <div id="details" hidden>
+        <label for="ad-npa">NPA *</label>
+        <input id="ad-npa" name="postalCode" type="text" value="1004" />
+
+        <label for="ad-price">Prix *</label>
+        <input id="ad-price" name="price" type="number" />
+
+        <label for="ad-title">Titre *</label>
+        <input id="ad-title" name="subject" type="text" maxlength="60" />
+
+        <label for="ad-desc">Description *</label>
+        <textarea id="ad-desc" name="body" rows="6" placeholder="Décrivez votre objet"></textarea>
+
+        <!-- The live form has no condition select for most categories; kept
+             here to cover the engine's select-by-option-text strategy. -->
+        <label for="ad-condition">État</label>
+        <select id="ad-condition" name="condition">
+          <option value="">—</option>
+          <option value="new">Neuf</option>
+          <option value="like-new">Comme neuf</option>
+          <option value="good">Bon état</option>
+          <option value="used">Utilisé</option>
+        </select>
+      </div>
 
       <p>Photos: <em>glissez vos photos ici</em></p>
     </form>
+    <script>
+      document.getElementById('pick-category').addEventListener('click', () => {
+        document.getElementById('category-name').textContent = 'Maison › Luminaires';
+        document.getElementById('details').hidden = false;
+      });
+    </script>
   </body>
 </html>
