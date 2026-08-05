@@ -11,23 +11,6 @@
   background: var(--surface);
 }
 
-button.config-toggle {
-  width: 100%;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.config-toggle .chevron {
-  font-size: 1.2rem;
-  color: var(--muted, #8a94a3);
-  transition: transform 0.15s ease;
-}
-
-.config-toggle .chevron.open {
-  transform: rotate(90deg);
-}
-
 .conversion-hint,
 .conversion-total {
   color: var(--faint);
