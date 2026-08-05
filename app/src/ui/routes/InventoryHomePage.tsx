@@ -15,6 +15,7 @@ import { useToast } from '../components/Toast';
 import {
   convertedMoneyHint,
   formatMoney,
+  itemCountLabel,
   itemMatchesQuery,
   weightLabel,
 } from '../lib/format';
@@ -95,6 +96,14 @@ export function InventoryHomePage() {
       }),
     [items, query, boxFilter, categoryFilter],
   );
+
+  const unitsOf = (list: Item[]) =>
+    list.reduce((sum, item) => sum + services.unitCount(item), 0);
+  const allCount = itemCountLabel(items.length, unitsOf(items));
+  const filteredUnits = unitsOf(filtered);
+  const filteredCount =
+    `${filtered.length} of ${items.length} items` +
+    (filteredUnits === filtered.length ? '' : ` (${filteredUnits} units)`);
 
   const boxLabel = (boxId: Id | undefined) =>
     boxId ? boxes.find((b) => b.id === boxId)?.label : undefined;
@@ -190,9 +199,7 @@ export function InventoryHomePage() {
     <>
       <AppHeader
         title={inv.meta.name || 'Untitled inventory'}
-        subtitle={`${items.length} item${items.length === 1 ? '' : 's'}${
-          inv.readonly ? ' · view only' : ''
-        }`}
+        subtitle={`${allCount}${inv.readonly ? ' · view only' : ''}`}
         back="/"
         status={inv.syncStatus}
         actions={
@@ -264,9 +271,7 @@ export function InventoryHomePage() {
 
           <div className="row between">
             <span className="small muted">
-              {filtered.length === items.length
-                ? `${items.length} item${items.length === 1 ? '' : 's'}`
-                : `${filtered.length} of ${items.length} items`}
+              {filtered.length === items.length ? allCount : filteredCount}
             </span>
             {items.length > 0 ? (
               <button

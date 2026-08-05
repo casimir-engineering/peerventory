@@ -2,11 +2,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   analyzeItemPhotos,
+  formatGrams,
   getLastCurrency,
+  itemValueTotal,
+  itemWeightGrams,
   rememberInput,
   rememberPlace,
   setLastCurrency,
   suggestInputs,
+  unitCount,
 } from '../../services';
 import type { AiSuggestions } from '../../services';
 import { getPhotoBlob, ownerDisplayName, useInventory } from '../../store';
@@ -47,7 +51,14 @@ import { SellModal } from '../components/SellModal';
 import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
 import { countryComboOptions } from '../lib/countries';
-import { formatDateTime, locationText, parseTags, sizeLabel, weightLabel } from '../lib/format';
+import {
+  formatAmount,
+  formatDateTime,
+  locationText,
+  parseTags,
+  sizeLabel,
+  weightLabel,
+} from '../lib/format';
 import { matchSerial } from '../lib/serial';
 import { getLocationWithPlace } from '../lib/geo';
 import '../entry.css';
@@ -66,6 +77,28 @@ function mergeSuggestions(key: string, existing: string[]): string[] {
   }
   for (const value of existing) push(value);
   return out;
+}
+
+/**
+ * The sheet describes a single object, so every figure on it is per unit.
+ * When it stands for several units, this spells out what they add up to —
+ * the same line totals the stats, list totals and exports are built from.
+ */
+function MultiUnitHint({ item }: { item: Item }) {
+  const units = unitCount(item);
+  if (units < 2) return null;
+  const value = itemValueTotal(item);
+  const weight = itemWeightGrams(item);
+  const parts = [
+    value ? `value ${formatAmount(value.amount, value.currency)}` : null,
+    weight.grams > 0 ? `weight ${weight.estimated ? '~' : ''}${formatGrams(weight.grams)}` : null,
+  ].filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <p className="tiny faint">
+      Every figure below is for one unit. × {units} = total {parts.join(', ')}.
+    </p>
+  );
 }
 
 export function ItemSheetPage() {
@@ -447,6 +480,7 @@ export function ItemSheetPage() {
                 />
               </div>
             )}
+            <MultiUnitHint item={sheet} />
 
             <InlineMoney
               label="Value now"

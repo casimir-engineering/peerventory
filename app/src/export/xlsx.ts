@@ -1,6 +1,7 @@
 import { Workbook, type Image as ExcelImage, type Worksheet } from 'exceljs';
 
 import { convert } from '../services/currency';
+import { unitCount } from '../services/stats';
 import {
   SIZE_CLASSES,
   WEIGHT_CLASSES,
@@ -188,7 +189,9 @@ async function populateManifest(
   const unconvertible = new Map<string, number>();
 
   for (const item of items) {
-    const quantity = item.quantity || 1;
+    // Row figures stay per unit (what a customs officer expects next to Qty);
+    // only the totals row multiplies them out.
+    const quantity = unitCount(item);
     totalQuantity += quantity;
     totalWeightGrams += estimatedWeightGrams(item) * quantity;
     if (item.valueCurrent) {
@@ -255,7 +258,10 @@ async function populateManifest(
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([currency, amount]) => `${formatDecimal(amount, 2)} ${currency}`);
   const totalsRow = worksheet.addRow({
-    itemName: `TOTALS (${items.length} items)`,
+    itemName:
+      totalQuantity === items.length
+        ? `TOTALS (${items.length} items)`
+        : `TOTALS (${items.length} items, ${totalQuantity} units)`,
     quantity: totalQuantity,
     value:
       extraTotals.length === 0

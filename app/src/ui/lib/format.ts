@@ -4,25 +4,9 @@ import { SIZE_CLASSES, WEIGHT_CLASSES } from '../../types';
 import type { Dimensions, Item, MoneyValue, Weight } from '../../types';
 import * as services from '../../services';
 
-/**
- * Best single-number estimate for one unit, in grams: exact measurement when
- * refined, otherwise the class midpoint (open-ended top class uses its minimum).
- */
-export function weightGrams(weight: Weight | undefined): number {
-  if (!weight) return 0;
-  if (typeof weight.exactGrams === 'number' && weight.exactGrams > 0) {
-    return weight.exactGrams;
-  }
-  const cls = WEIGHT_CLASSES[weight.class];
-  if (!cls) return 0;
-  return cls.maxG === null ? cls.minG : (cls.minG + cls.maxG) / 2;
-}
-
+/** Every unit of every item together: per-unit weight × quantity. */
 export function totalWeightGrams(items: Item[]): number {
-  return items.reduce(
-    (sum, item) => sum + weightGrams(item.weight) * Math.max(1, item.quantity || 1),
-    0,
-  );
+  return items.reduce((sum, item) => sum + services.itemWeightGrams(item).grams, 0);
 }
 
 /** True when the weight comes from the class midpoint rather than a measurement. */
@@ -113,12 +97,24 @@ export function totalsByCurrency(
 ): Array<{ currency: string; amount: number }> {
   const byCurrency = new Map<string, number>();
   for (const item of items) {
-    const value = item[field];
-    if (!value || !Number.isFinite(value.amount)) continue;
-    const qty = Math.max(1, item.quantity || 1);
-    byCurrency.set(value.currency, (byCurrency.get(value.currency) ?? 0) + value.amount * qty);
+    const lineTotal = services.itemValueTotal(item, field);
+    if (!lineTotal) continue;
+    byCurrency.set(
+      lineTotal.currency,
+      (byCurrency.get(lineTotal.currency) ?? 0) + lineTotal.amount,
+    );
   }
   return [...byCurrency.entries()].map(([currency, amount]) => ({ currency, amount }));
+}
+
+/**
+ * "3 items", plus the unit count when the two differ. Item sheets and units
+ * are deliberately kept apart: a sheet describes one object, its quantity says
+ * how many of that object there are, and only the second one drives totals.
+ */
+export function itemCountLabel(itemCount: number, unitCount: number): string {
+  const items = `${itemCount} item${itemCount === 1 ? '' : 's'}`;
+  return unitCount === itemCount ? items : `${items} (${unitCount} units)`;
 }
 
 export function formatTotals(totals: Array<{ currency: string; amount: number }>): string {

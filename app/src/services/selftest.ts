@@ -6,6 +6,8 @@
 
 import { formatGrams, formatMm, parseLengthToMm, parseWeightToGrams } from './units';
 import { nearestPlaceLabel, rememberPlace } from './geocode';
+import { summarizeItems, unitCount } from './stats';
+import type { Item } from '../types';
 
 export function runServicesSelftest(): { passed: number; failed: number; failures: string[] } {
   const failures: string[] = [];
@@ -48,6 +50,30 @@ export function runServicesSelftest(): { passed: number; failed: number; failure
   eq('format 99mm', formatMm(99), '99 mm');
   eq('format 100mm', formatMm(100), '10 cm');
   eq('format 1000mm', formatMm(1000), '1 m');
+
+  // quantity-aware totals: an item sheet is one object, quantity says how many
+  const sheet = (quantity: number, amount: number, grams: number): Item => ({
+    id: `item${quantity}`,
+    createdAt: 0,
+    updatedAt: 0,
+    description: 'Self-test item',
+    tags: [],
+    quantity,
+    valueCurrent: { amount, currency: 'USD' },
+    photos: [],
+    locationHistory: [],
+    ownerHistory: [],
+    weight: { class: 'kg1_2', exactGrams: grams },
+    dimensions: { class: 'shoebox', exactMm: { l: 100, w: 100, h: 100 } },
+  });
+  eq('unit count of a plain item', unitCount(sheet(1, 10, 100)), 1);
+  eq('unit count never drops below one', unitCount(sheet(0, 10, 100)), 1);
+  const totals = summarizeItems([sheet(1, 10, 100), sheet(4, 25, 250)], 'USD');
+  eq('item count counts sheets', totals.itemCount, 2);
+  eq('unit count sums quantities', totals.unitCount, 5);
+  eq('value total multiplies by quantity', totals.currentValue.converted, 110);
+  eq('weight total multiplies by quantity', totals.weightGrams, 1100);
+  eq('volume total multiplies by quantity', Number(totals.volumeM3.toFixed(6)), 0.005);
 
   // nearestPlaceLabel haversine math (isolated from real saved places)
   const saved = localStorage.getItem('places:v1');

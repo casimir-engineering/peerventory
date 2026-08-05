@@ -122,7 +122,10 @@ move works offline. If a photo was never downloaded to this device, the app
 says so and asks before leaving it behind.
 
 **Statistics.** Total value, weight, and volume per inventory, broken down by
-carton and category — matching what goes on the customs manifest.
+carton and category — matching what goes on the customs manifest. An item
+sheet describes one object, so every total multiplies its per-unit value,
+weight and volume by that item's quantity; counts stay counts of items, with
+the unit count shown beside them whenever the two differ.
 
 **Exports and imports.** An inventory's Settings has one tap each for
 **Spreadsheet (.xlsx)** (the customs manifest, with photo thumbnails),

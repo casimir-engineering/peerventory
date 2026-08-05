@@ -135,10 +135,16 @@ export async function runExportSelftest(): Promise<void> {
   const laptopRow = dataRows.find((row) => row.getCell(2).value === 'Laptop computer');
   assert(laptopRow, 'laptop item should round-trip by name');
   assert(laptopRow.height > 60, 'photo rows should be tall enough to show the image');
+  const laptopQuantity = laptopRow.getCell(3).value;
+  assert(laptopQuantity === 1, 'manifest rows should carry the quantity');
+  assert(laptopRow.getCell(5).value === 850, 'manifest rows should stay per unit');
   const totalsRow = manifest.getRow(2 + items.length);
-  assert(totalsRow.getCell(2).value === `TOTALS (${items.length} items)`,
-    'totals row should count items');
+  assert(totalsRow.getCell(2).value === `TOTALS (${items.length} items, 6 units)`,
+    'totals row should count both sheets and units');
   assert(totalsRow.getCell(3).value === 6, 'totals row should sum quantities');
+  // 1 × 1500 g + 2 × 20 kg (gt20kg class minimum) + 3 × 125 g (50–200 g midpoint).
+  assert(totalsRow.getCell(12).value === '~41.875 kg',
+    'totals row weight should multiply each item by its quantity');
   assert(reread.getWorksheet('Full data'), 'Full data sheet should survive');
 
   const zip = await inventoryToZip(

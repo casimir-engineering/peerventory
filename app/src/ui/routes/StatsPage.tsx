@@ -8,19 +8,15 @@ import { AppHeader } from '../components/AppHeader';
 import { EmptyState, LoadingPage, SectionTitle, SyncingState } from '../components/Common';
 import { convertedAmount, formatAmount } from '../lib/format';
 
-type ValueField = 'valueCurrent' | 'valueNew';
-
-interface ValueSummary {
-  converted: number;
-  convertedCount: number;
-  valuedCount: number;
-  unconverted: Array<{ currency: string; amount: number }>;
-}
+type ValueSummary = services.ValueSummary;
 
 interface BreakdownRow {
   key: string;
   label: string;
+  /** Item sheets in this group. */
   count: number;
+  /** Physical units in this group: the sum of the quantities. */
+  units: number;
   value: number;
   valueCount: number;
   unconvertedValueCount: number;
@@ -28,58 +24,6 @@ interface BreakdownRow {
   weightEstimated: boolean;
   volumeM3: number;
   volumeEstimated: boolean;
-}
-
-function quantityOf(item: Item): number {
-  return Math.max(1, Number.isFinite(item.quantity) ? item.quantity : 1);
-}
-
-function summarizeValue(items: Item[], field: ValueField, mainCurrency: string): ValueSummary {
-  let converted = 0;
-  let convertedCount = 0;
-  let valuedCount = 0;
-  const unconverted = new Map<string, number>();
-
-  for (const item of items) {
-    const value = item[field];
-    if (!value || !Number.isFinite(value.amount)) continue;
-    valuedCount += 1;
-    const amount = value.amount * quantityOf(item);
-    const currency = value.currency?.trim().toUpperCase();
-    const result = currency ? convertedAmount(amount, currency, mainCurrency) : null;
-    if (result === null) {
-      const label = currency || 'No currency';
-      unconverted.set(label, (unconverted.get(label) ?? 0) + amount);
-    } else {
-      converted += result;
-      convertedCount += 1;
-    }
-  }
-
-  return {
-    converted,
-    convertedCount,
-    valuedCount,
-    unconverted: [...unconverted.entries()]
-      .map(([currency, amount]) => ({ currency, amount }))
-      .sort((a, b) => a.currency.localeCompare(b.currency)),
-  };
-}
-
-function itemWeight(item: Item) {
-  const result = services.weightGramsOfItem(item);
-  return {
-    amount: Number.isFinite(result.grams) ? result.grams * quantityOf(item) : 0,
-    estimated: result.estimated,
-  };
-}
-
-function itemVolume(item: Item) {
-  const result = services.volumeM3OfItem(item);
-  return {
-    amount: Number.isFinite(result.m3) ? result.m3 * quantityOf(item) : 0,
-    estimated: result.estimated,
-  };
 }
 
 function makeBreakdown(
@@ -96,6 +40,7 @@ function makeBreakdown(
       row = {
         ...group,
         count: 0,
+        units: 0,
         value: 0,
         valueCount: 0,
         unconvertedValueCount: 0,
@@ -108,13 +53,10 @@ function makeBreakdown(
     }
 
     row.count += 1;
-    const value = item.valueCurrent;
-    if (value && Number.isFinite(value.amount)) {
-      const converted = convertedAmount(
-        value.amount * quantityOf(item),
-        value.currency,
-        mainCurrency,
-      );
+    row.units += services.unitCount(item);
+    const lineTotal = services.itemValueTotal(item);
+    if (lineTotal) {
+      const converted = convertedAmount(lineTotal.amount, lineTotal.currency, mainCurrency);
       if (converted === null) row.unconvertedValueCount += 1;
       else {
         row.value += converted;
@@ -122,15 +64,21 @@ function makeBreakdown(
       }
     }
 
-    const weight = itemWeight(item);
-    row.weightGrams += weight.amount;
+    const weight = services.itemWeightGrams(item);
+    row.weightGrams += weight.grams;
     row.weightEstimated ||= weight.estimated;
-    const volume = itemVolume(item);
-    row.volumeM3 += volume.amount;
+    const volume = services.itemVolumeM3(item);
+    row.volumeM3 += volume.m3;
     row.volumeEstimated ||= volume.estimated;
   }
 
   return [...rows.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** Units only earn a line of their own when a sheet stands for more than one. */
+function unitsDetail(itemCount: number, unitCount: number): string | undefined {
+  if (unitCount === itemCount) return undefined;
+  return `${unitCount} units`;
 }
 
 function formatVolume(m3: number, estimated: boolean): string {
@@ -146,31 +94,13 @@ export function StatsPage() {
   const mainCurrency = inv.meta?.currency?.trim().toUpperCase() || 'USD';
 
   const stats = useMemo(() => {
-    const currentValue = summarizeValue(items, 'valueCurrent', mainCurrency);
-    const newValue = summarizeValue(items, 'valueNew', mainCurrency);
-    let weightGrams = 0;
-    let weightEstimated = false;
-    let volumeM3 = 0;
-    let volumeEstimated = false;
-
-    for (const item of items) {
-      const weight = itemWeight(item);
-      weightGrams += weight.amount;
-      weightEstimated ||= weight.estimated;
-      const volume = itemVolume(item);
-      volumeM3 += volume.amount;
-      volumeEstimated ||= volume.estimated;
-    }
-
     const boxLabels = new Map(boxes.map((box) => [box.id, box.label]));
     return {
-      quantity: items.reduce((total, item) => total + quantityOf(item), 0),
-      currentValue,
-      newValue,
-      weightGrams,
-      weightEstimated,
-      volumeM3,
-      volumeEstimated,
+      ...services.summarizeItems(items, mainCurrency),
+      lithiumUnits: items.reduce(
+        (total, item) => total + (item.lithiumBattery ? services.unitCount(item) : 0),
+        0,
+      ),
       lithiumCount: items.filter((item) => item.lithiumBattery).length,
       photoCount: items.reduce((total, item) => total + (item.photos?.length ?? 0), 0),
       byBox: makeBreakdown(items, mainCurrency, (item) => ({
@@ -229,7 +159,11 @@ export function StatsPage() {
       <main className="page stats-page">
         <div className="stack loose">
           <section className="stats-summary">
-            <StatCard label="Items" value={String(items.length)} detail={`${stats.quantity} total quantity`} />
+            <StatCard
+              label="Items"
+              value={String(stats.itemCount)}
+              detail={unitsDetail(stats.itemCount, stats.unitCount)}
+            />
             <StatCard
               label={`Current value in ${mainCurrency}`}
               value={
@@ -250,7 +184,11 @@ export function StatsPage() {
               label={stats.volumeEstimated ? 'Estimated volume' : 'Volume'}
               value={formatVolume(stats.volumeM3, stats.volumeEstimated)}
             />
-            <StatCard label="Lithium battery items" value={String(stats.lithiumCount)} />
+            <StatCard
+              label="Lithium battery items"
+              value={String(stats.lithiumCount)}
+              detail={unitsDetail(stats.lithiumCount, stats.lithiumUnits)}
+            />
             <StatCard label="Photos" value={String(stats.photoCount)} />
           </section>
 
@@ -276,6 +214,14 @@ export function StatsPage() {
               mainCurrency={mainCurrency}
             />
           </div>
+
+          {stats.unitCount !== stats.itemCount && (
+            <p className="tiny faint">
+              An item sheet describes one object, so every value, weight and volume here is
+              multiplied by that item's quantity: {stats.itemCount} item
+              {stats.itemCount === 1 ? '' : 's'} add up to {stats.unitCount} units.
+            </p>
+          )}
 
           {(stats.weightEstimated || stats.volumeEstimated) && (
             <p className="tiny faint">
@@ -350,7 +296,7 @@ function BreakdownTable({
           <thead>
             <tr>
               <th>{title === 'By box' ? 'Box' : 'Category'}</th>
-              <th className="num">Count</th>
+              <th className="num">Items</th>
               <th className="num">Value ({mainCurrency})</th>
               <th className="num">Weight</th>
               <th className="num">Volume</th>
@@ -367,7 +313,12 @@ function BreakdownTable({
               rows.map((row) => (
                 <tr key={row.key}>
                   <td>{row.label}</td>
-                  <td className="num">{row.count}</td>
+                  <td className="num">
+                    {row.count}
+                    {row.units === row.count ? null : (
+                      <div className="conversion-hint">{row.units} units</div>
+                    )}
+                  </td>
                   <td className="num">
                     {row.valueCount > 0 ? formatAmount(row.value, mainCurrency) : '—'}
                     {row.unconvertedValueCount > 0 ? (

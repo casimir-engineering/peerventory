@@ -5,7 +5,7 @@ import * as services from '../../services';
 import { getDeviceId, snapshotInventory, useInventories } from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
 import type { Id, InventoryHandle, InventorySnapshot, Item } from '../../types';
-import { formatAmount, formatMoney } from '../lib/format';
+import { formatAmount, formatMoney, itemCountLabel } from '../lib/format';
 import { AppHeader } from '../components/AppHeader';
 import { NameModal } from '../components/AccountModals';
 import { EmptyState, SectionTitle } from '../components/Common';
@@ -160,9 +160,17 @@ function SearchResultRow({ result }: { result: SearchResult }) {
   const { docId, inventoryName, item } = result;
   const cover = item.photos?.[0]?.hash ?? null;
   const location = lastLocationLabel(item);
-  const detail = [inventoryName, item.valueCurrent ? formatMoney(item.valueCurrent) : null, location]
-    .filter(Boolean)
-    .join(' · ');
+  // The value describes one object, so it stays per unit; a multi-unit item
+  // also gets its line total, which is the number that lands in the totals.
+  const units = services.unitCount(item);
+  const lineTotal = units > 1 ? services.itemValueTotal(item) : null;
+  const money = item.valueCurrent
+    ? formatMoney(item.valueCurrent) +
+      (lineTotal ? ` × ${units} = ${formatAmount(lineTotal.amount, lineTotal.currency)}` : '')
+    : units > 1
+      ? `× ${units}`
+      : null;
+  const detail = [inventoryName, money, location].filter(Boolean).join(' · ');
   return (
     <Link className="list-row" to={`/inv/${docId}/i/${item.id}`}>
       <PhotoImage docId={docId} hash={cover} alt="" className="thumb sm" />
@@ -420,50 +428,37 @@ function formatAgo(epochMs: number): string {
 
 interface RowStats {
   itemCount: number;
+  unitCount: number;
   valueText: string | null;
   weightText: string | null;
   volumeText: string | null;
   peerLabel: string | null;
 }
 
+/** Every figure is a total: per-unit values multiplied by each item's quantity. */
 function computeRowStats(snap: InventorySnapshot): RowStats {
-  const items = snap.items;
   const main = snap.meta.currency || 'USD';
-
-  let value = 0;
-  let unconverted = 0;
-  let grams = 0;
-  let weightEstimated = false;
-  let m3 = 0;
-  let volumeEstimated = false;
-
-  for (const item of items) {
-    const qty = item.quantity ?? 1;
-    if (item.valueCurrent) {
-      const converted = services.convert(item.valueCurrent.amount, item.valueCurrent.currency, main);
-      if (converted === null) unconverted += 1;
-      else value += converted * qty;
-    }
-    const w = services.weightGramsOfItem(item);
-    grams += w.grams * qty;
-    if (w.estimated) weightEstimated = true;
-    const v = services.volumeM3OfItem(item);
-    m3 += v.m3 * qty;
-    if (v.estimated) volumeEstimated = true;
-  }
+  const totals = services.summarizeItems(snap.items, main);
+  const { converted, unconverted } = totals.currentValue;
+  const grams = totals.weightGrams;
+  const m3 = totals.volumeM3;
 
   const myDevice = getDeviceId();
   const peer = (snap.devices ?? []).find((d) => d.id !== myDevice);
 
   return {
-    itemCount: items.length,
+    itemCount: totals.itemCount,
+    unitCount: totals.unitCount,
     valueText:
-      items.length === 0
+      totals.itemCount === 0
         ? null
-        : formatAmount(Math.round(value), main) + (unconverted > 0 ? '+' : ''),
+        : formatAmount(Math.round(converted), main) + (unconverted.length > 0 ? '+' : ''),
     weightText:
-      grams > 0 ? (weightEstimated ? '~' : '') + services.formatGrams(Math.round(grams)) : null,
-    volumeText: m3 > 0 ? `${volumeEstimated ? '~' : ''}${m3.toFixed(m3 < 0.1 ? 3 : 2)} m³` : null,
+      grams > 0
+        ? (totals.weightEstimated ? '~' : '') + services.formatGrams(Math.round(grams))
+        : null,
+    volumeText:
+      m3 > 0 ? `${totals.volumeEstimated ? '~' : ''}${m3.toFixed(m3 < 0.1 ? 3 : 2)} m³` : null,
     peerLabel: peer ? `${peer.label} ${formatAgo(peer.at)}` : null,
   };
 }
@@ -485,7 +480,7 @@ function InventoryRow({ handle }: { handle: InventoryHandle }) {
 
   const summary = stats
     ? [
-        `${stats.itemCount} item${stats.itemCount === 1 ? '' : 's'}`,
+        itemCountLabel(stats.itemCount, stats.unitCount),
         stats.valueText,
         stats.weightText,
         stats.volumeText,

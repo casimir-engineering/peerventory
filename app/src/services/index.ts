@@ -7,6 +7,15 @@ export {
   weightGramsOfItem,
   volumeM3OfItem,
 } from './units';
+export {
+  unitCount,
+  itemWeightGrams,
+  itemVolumeM3,
+  itemValueTotal,
+  summarizeValue,
+  summarizeItems,
+} from './stats';
+export type { ItemsSummary, ValueSummary, ValueField } from './stats';
 export { searchPlaces, rememberPlace, nearestPlaceLabel } from './geocode';
 export type { PlaceHit } from './geocode';
 export {

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { itemValueTotal, itemWeightGrams, unitCount } from '../../services';
 import { useInventory } from '../../store';
 import type { UseInventoryResult } from '../../store/contract';
 import type { Box, Item, MoneyValue, SavedList } from '../../types';
@@ -66,7 +67,7 @@ export function ListViewPage() {
   const boxLabel = (boxId: string | undefined) =>
     boxId ? (boxes.find((b) => b.id === boxId)?.label ?? '—') : '—';
 
-  const totalUnits = items.reduce((sum, item) => sum + Math.max(1, item.quantity || 1), 0);
+  const totalUnits = items.reduce((sum, item) => sum + unitCount(item), 0);
   const weightGramsTotal = totalWeightGrams(items);
   const weightIsEstimate = anyWeightEstimated(items);
   const currentTotals = totalsByCurrency(items, 'valueCurrent');
@@ -243,8 +244,11 @@ export function ListViewPage() {
                           <div className="tiny faint">Serial {item.serialNumber}</div>
                         ) : null}
                       </td>
-                      <td className="num">{item.quantity || 1}</td>
-                      <td>{weightLabel(item.weight)}</td>
+                      <td className="num">{unitCount(item)}</td>
+                      <td>
+                        {weightLabel(item.weight)}
+                        <LineTotalHint item={item} kind="weight" />
+                      </td>
                       <td>{sizeLabel(item.dimensions)}</td>
                       <td>{boxLabel(item.boxId)}</td>
                       <td className="num">
@@ -252,6 +256,7 @@ export function ListViewPage() {
                           value={item.valueCurrent}
                           mainCurrency={mainCurrency}
                         />
+                        <LineTotalHint item={item} kind="value" />
                       </td>
                     </tr>
                   ))}
@@ -324,6 +329,33 @@ export function ListViewPage() {
         />
       ) : null}
     </>
+  );
+}
+
+/**
+ * Per-unit figures describe the object, which is what a manifest row is for.
+ * When one row stands for several units, the line total is what feeds the
+ * totals at the top, so it is spelled out rather than left to the reader.
+ */
+function LineTotalHint({ item, kind }: { item: Item; kind: 'value' | 'weight' }) {
+  const units = unitCount(item);
+  if (units < 2) return null;
+  if (kind === 'weight') {
+    const total = itemWeightGrams(item);
+    if (total.grams <= 0) return null;
+    return (
+      <div className="conversion-hint">
+        × {units} = {total.estimated ? '~' : ''}
+        {formatGrams(total.grams)}
+      </div>
+    );
+  }
+  const total = itemValueTotal(item);
+  if (!total) return null;
+  return (
+    <div className="conversion-hint">
+      × {units} = {formatAmount(total.amount, total.currency)}
+    </div>
   );
 }
 
