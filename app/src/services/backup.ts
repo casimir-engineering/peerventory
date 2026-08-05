@@ -221,6 +221,12 @@ export interface ImportBackupResult {
   aiKeyApplied: boolean;
   /** This device joined (or switched to) the backup's synced profile. */
   profileLinked: boolean;
+  /**
+   * Resolves once the docs that gained a content key have been wiped and
+   * reopened. Anything that writes into those docs (an account restore
+   * putting their contents back) must wait for it, or the wipe eats the write.
+   */
+  reopened: Promise<void>;
 }
 
 /**
@@ -279,9 +285,9 @@ export function importBackup(backup: DecodedBackup): ImportBackupResult {
 
   const counts = importHandles(backup.handles);
 
-  for (const docId of gainedKey) {
-    void reopenEncryptedDoc(docId);
-  }
+  const reopened = Promise.all(
+    gainedKey.map((docId) => reopenEncryptedDoc(docId).catch(() => {})),
+  ).then(() => undefined);
 
   // Join the exporter's synced profile (device group) when the payload
   // carries one; otherwise the static import above is merged into THIS
@@ -301,5 +307,5 @@ export function importBackup(backup: DecodedBackup): ImportBackupResult {
     aiKeyApplied = true;
   }
 
-  return { ...counts, nameApplied, aiKeyApplied, profileLinked };
+  return { ...counts, nameApplied, aiKeyApplied, profileLinked, reopened };
 }

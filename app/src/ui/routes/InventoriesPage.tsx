@@ -15,20 +15,23 @@ import type { UseInventoriesResult } from '../../store/contract';
 import type { Id, InventoryHandle, InventorySnapshot, Item } from '../../types';
 import { formatAmount, formatMoney } from '../lib/format';
 import { AppHeader } from '../components/AppHeader';
-import { EmptyState, SectionTitle } from '../components/Common';
+import { EmptyState, SectionTitle, Spinner } from '../components/Common';
 import { PhotoImage } from '../components/Photos';
 import { Field, Toggle, useCurrencyComboOptions } from '../components/Fields';
 import { SmartCombo } from '../components/SmartCombo';
+import { AccountRestoreModal } from '../components/AccountRestoreModal';
 import { ImportModal } from '../components/ImportModal';
 import { ConfirmModal, Modal } from '../components/Modal';
 import { QrCanvas } from '../components/QrCanvas';
 import { QrScanner } from '../components/QrScanner';
 import { RelaysSection } from '../components/RelaysSection';
 import { useToast } from '../components/Toast';
-import { buildBackupUrl, joinRoute, parseShareLink } from '../lib/links';
-import type { ParsedImport } from '../lib/importFile';
-import { parseInventoryFile } from '../lib/importFile';
+import { buildAccountBackup } from '../lib/accountBackup';
+import { buildBackupUrl, copyToClipboard, joinRoute, parseShareLink } from '../lib/links';
+import type { ParsedAccount, ParsedImport } from '../lib/importFile';
+import { parseImportFile } from '../lib/importFile';
 import { decodeQrImage } from '../lib/qrDecode';
+import { dataUrlToBlob, useFileSaver } from '../lib/saveFile';
 
 const NAME_WELCOME_DISMISSED = 'profile-name-welcome-dismissed:v1';
 const CONFIG_OPEN = 'inventories-config-open:v1';
@@ -225,6 +228,10 @@ export function InventoriesPage() {
   const [importState, setImportState] = useState<{ parsed: ParsedImport; fileName: string } | null>(
     null,
   );
+  const [accountRestore, setAccountRestore] = useState<{
+    account: ParsedAccount;
+    fileName: string;
+  } | null>(null);
   const [configOpen, setConfigOpen] = useState(configWasOpen);
   const [dragActive, setDragActive] = useState(false);
   const dragDepth = useRef(0);
@@ -283,7 +290,10 @@ export function InventoriesPage() {
     [navigate, toast],
   );
 
-  /** Dispatch a dropped or picked file: QR image, or ZIP/YAML inventory export. */
+  /**
+   * Dispatch a dropped or picked file: QR image, single inventory export
+   * (ZIP/YAML), or a full-account backup ZIP.
+   */
   const handleFile = useCallback(
     async (file: File) => {
       const name = file.name.toLowerCase();
@@ -294,8 +304,12 @@ export function InventoriesPage() {
         file.type === 'application/zip';
       if (isData) {
         try {
-          const parsed = await parseInventoryFile(file);
-          setImportState({ parsed, fileName: file.name });
+          const result = await parseImportFile(file);
+          if (result.kind === 'account') {
+            setAccountRestore({ account: result.account, fileName: file.name });
+          } else {
+            setImportState({ parsed: result.parsed, fileName: file.name });
+          }
         } catch (err) {
           toastError(err instanceof Error ? err.message : 'Could not read this file');
         }
@@ -343,7 +357,9 @@ export function InventoriesPage() {
     >
       {dragActive ? (
         <div className="drop-overlay" aria-hidden="true">
-          <div className="drop-overlay-inner">Drop a .zip / .yaml export or a QR image</div>
+          <div className="drop-overlay-inner">
+            Drop an account backup, a .zip / .yaml export, or a QR image
+          </div>
         </div>
       ) : null}
       <AppHeader
@@ -596,6 +612,18 @@ export function InventoriesPage() {
               .catch((err: unknown) =>
                 toastError(err instanceof Error ? err.message : 'Could not unlink this device'),
               );
+          }}
+        />
+      ) : null}
+
+      {accountRestore ? (
+        <AccountRestoreModal
+          account={accountRestore.account}
+          fileName={accountRestore.fileName}
+          onClose={() => setAccountRestore(null)}
+          onRestored={(summary) => {
+            setAccountRestore(null);
+            toast(summary);
           }}
         />
       ) : null}
@@ -967,21 +995,19 @@ function CreateInventoryModal({
  */
 function BackupModal({ onClose }: { onClose: () => void }) {
   const { toast, toastError } = useToast();
+  const { saveFile } = useFileSaver();
   const [linkPayload] = useState(() => services.encodeLinkToken());
   const [backupPayload] = useState(() => services.encodeBackup());
+  const [zipBusy, setZipBusy] = useState<string | null>(null);
   const linkUrl = buildBackupUrl(linkPayload);
   const backupUrl = buildBackupUrl(backupPayload);
 
   const copy = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast(`${label} copied`);
-    } catch {
-      toastError('Clipboard unavailable — long-press the link to copy it');
-    }
+    if (await copyToClipboard(text)) toast(`${label} copied`);
+    else toastError('Clipboard unavailable — long-press the link to copy it');
   };
 
-  const downloadQr = async (url: string, kind: 'device-link' | 'full-backup') => {
+  const shareQr = async (url: string, kind: 'device-link' | 'full-backup') => {
     try {
       const dataUrl = await QRCode.toDataURL(url, {
         // A saved image is decoded from clean pixels, not through a camera,
@@ -992,12 +1018,29 @@ function BackupModal({ onClose }: { onClose: () => void }) {
         errorCorrectionLevel: kind === 'full-backup' ? 'M' : 'Q',
         color: { dark: '#0b0e11', light: '#ffffff' },
       });
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `peerventory-${kind}-${new Date().toISOString().slice(0, 10)}.png`;
-      a.click();
+      const filename = `peerventory-${kind}-${new Date().toISOString().slice(0, 10)}.png`;
+      await saveFile(dataUrlToBlob(dataUrl), filename, 'QR image');
     } catch {
       toastError('This backup is too large for a QR code — use the link instead');
+    }
+  };
+
+  const shareAccountZip = async () => {
+    if (zipBusy !== null) return;
+    setZipBusy('Packing…');
+    try {
+      const { blob, filename, inventories } = await buildAccountBackup((done, total) =>
+        setZipBusy(`Packing ${done}/${total}`),
+      );
+      await saveFile(
+        blob,
+        filename,
+        `Account backup (${inventories} inventor${inventories === 1 ? 'y' : 'ies'})`,
+      );
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Could not build the account backup');
+    } finally {
+      setZipBusy(null);
     }
   };
 
@@ -1025,9 +1068,9 @@ function BackupModal({ onClose }: { onClose: () => void }) {
         <button
           type="button"
           className="link-btn"
-          onClick={() => void downloadQr(linkUrl, 'device-link')}
+          onClick={() => void shareQr(linkUrl, 'device-link')}
         >
-          Save QR image
+          Share QR image
         </button>
       </div>
       <p className="tiny faint">
@@ -1035,11 +1078,26 @@ function BackupModal({ onClose }: { onClose: () => void }) {
         everything you have — treat it like a password.
       </p>
       <hr />
+      <p className="small muted">
+        <strong>Full account backup (.zip).</strong> One file with your account and the complete
+        contents of every inventory, photos included. This is the offline backup: restoring it
+        brings everything back even with no relay in reach. Drop it on the inventories list (or use
+        Import file) to restore.
+      </p>
+      <button
+        type="button"
+        className="btn primary"
+        disabled={zipBusy !== null}
+        onClick={() => void shareAccountZip()}
+      >
+        {zipBusy !== null ? <Spinner /> : null} {zipBusy ?? 'Share full account backup (.zip)'}
+      </button>
+      <hr />
       <p className="tiny faint">
-        <strong>Full backup.</strong> Every inventory token in one payload, for archiving, for
-        restoring onto a device that will never reach a relay, and for connecting the browser
-        extension. Far too dense to read off a screen with a camera, so use the link — or the
-        saved image, which decodes from clean pixels.
+        <strong>Full backup link.</strong> Every inventory token in one payload — access only, so
+        the contents are pulled from a relay afterwards. For archiving alongside the ZIP and for
+        connecting the browser extension. Far too dense to read off a screen with a camera, so use
+        the link — or the saved image, which decodes from clean pixels.
       </p>
       <div className="row" style={{ justifyContent: 'center' }}>
         <button
@@ -1052,9 +1110,9 @@ function BackupModal({ onClose }: { onClose: () => void }) {
         <button
           type="button"
           className="link-btn"
-          onClick={() => void downloadQr(backupUrl, 'full-backup')}
+          onClick={() => void shareQr(backupUrl, 'full-backup')}
         >
-          Save full backup image
+          Share full backup image
         </button>
       </div>
     </Modal>

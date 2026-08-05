@@ -12,6 +12,7 @@
 import type { Item, MoneyValue } from '../../types';
 import { getAiKey } from '../../services';
 import { downloadBlob } from '../../export';
+import type { OutFile } from '../../export';
 import { getPhotoBlob } from '../../store';
 import { safeFilename } from './format';
 
@@ -321,22 +322,32 @@ function extensionForMime(mime: string): string {
 }
 
 /**
- * Saves the item's decrypted photos as individual files (loose files drag
- * into listing forms directly, unlike a zip). Sequential with a small gap so
- * the browser's multiple-download prompt fires once instead of dropping
- * files. Returns how many photos were actually available on this device.
+ * The item's decrypted photos as loose files (loose files drag into listing
+ * forms directly, unlike a zip). Photos that are not on this device yet are
+ * skipped, so the result can be shorter than item.photos.
  */
-export async function downloadListingPhotos(docId: string, item: Item): Promise<number> {
+export async function collectListingPhotos(docId: string, item: Item): Promise<OutFile[]> {
   const base = safeFilename(item.description || item.brandModel || 'item', 'item');
-  let saved = 0;
-  const photos = item.photos ?? [];
-  for (let i = 0; i < photos.length; i++) {
-    const photo = photos[i];
+  const files: OutFile[] = [];
+  for (const photo of item.photos ?? []) {
     const blob = await getPhotoBlob(docId, photo.hash);
     if (!blob) continue;
-    saved++;
-    downloadBlob(blob, `${base}-${saved}.${extensionForMime(photo.mime || blob.type)}`);
-    if (i < photos.length - 1) await new Promise((r) => setTimeout(r, 300));
+    files.push({
+      blob,
+      filename: `${base}-${files.length + 1}.${extensionForMime(photo.mime || blob.type)}`,
+    });
   }
-  return saved;
+  return files;
+}
+
+/**
+ * Browser path only: sequential with a small gap so the multiple-download
+ * prompt fires once instead of dropping files. The APK shares them through
+ * the OS sheet instead (anchor downloads do nothing in the WebView).
+ */
+export async function downloadPhotoFiles(files: OutFile[]): Promise<void> {
+  for (let i = 0; i < files.length; i++) {
+    downloadBlob(files[i].blob, files[i].filename);
+    if (i < files.length - 1) await new Promise((r) => setTimeout(r, 300));
+  }
 }

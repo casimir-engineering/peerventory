@@ -1,6 +1,10 @@
 import JSZip from 'jszip';
 import { parse } from 'yaml';
 
+import { ACCOUNT_MANIFEST_NAME, isAccountManifest } from '../../export';
+import type { AccountManifest } from '../../export';
+import { decodeBackup } from '../../services';
+import type { DecodedBackup } from '../../services';
 import {
   SIZE_CLASSES,
   WEIGHT_CLASSES,
@@ -317,15 +321,18 @@ function mimeForPhotoPath(path: string): string {
   return 'application/octet-stream';
 }
 
-async function parseZip(file: File, fallbackName: string): Promise<ParsedImport> {
-  let zip: JSZip;
-  try {
-    zip = await JSZip.loadAsync(file);
-  } catch {
-    throw new Error(NOT_EXPORT_ERROR);
-  }
-
-  const inventoryEntry = zip.file('inventory.yaml');
+/**
+ * One inventory inside an open archive: `folder` is '' for a per-inventory
+ * export and 'inventories/<docId>' inside a full-account backup (both write
+ * the same inventory.yaml + photos/ layout, see export/zip.ts).
+ */
+async function parseInventoryFolder(
+  zip: JSZip,
+  folder: string,
+  fallbackName: string,
+): Promise<ParsedImport> {
+  const prefix = folder ? `${folder.replace(/\/$/, '')}/` : '';
+  const inventoryEntry = zip.file(`${prefix}inventory.yaml`);
   if (!inventoryEntry) throw new Error('This archive does not contain inventory.yaml');
 
   let parsed: Omit<ParsedImport, 'photoBlobs'>;
@@ -335,10 +342,11 @@ async function parseZip(file: File, fallbackName: string): Promise<ParsedImport>
     throw new Error(NOT_EXPORT_ERROR);
   }
 
+  const photoPrefix = `${prefix}photos/`;
   const photoBlobs = new Map<string, Blob>();
   await Promise.all(
     Object.values(zip.files).map(async (entry) => {
-      if (entry.dir || !entry.name.startsWith('photos/')) return;
+      if (entry.dir || !entry.name.startsWith(photoPrefix)) return;
       const fileName = entry.name.split('/').pop() ?? '';
       const extensionAt = fileName.lastIndexOf('.');
       const hash = extensionAt > 0 ? fileName.slice(0, extensionAt) : fileName;
@@ -351,6 +359,18 @@ async function parseZip(file: File, fallbackName: string): Promise<ParsedImport>
   );
 
   return { ...parsed, photoBlobs };
+}
+
+async function parseZip(file: File, fallbackName: string): Promise<ParsedImport> {
+  return parseInventoryFolder(await loadZip(file), '', fallbackName);
+}
+
+async function loadZip(file: File | Blob): Promise<JSZip> {
+  try {
+    return await JSZip.loadAsync(file);
+  } catch {
+    throw new Error(NOT_EXPORT_ERROR);
+  }
 }
 
 function hasZipSignature(file: File): Promise<boolean> {
@@ -370,16 +390,91 @@ function hasZipSignature(file: File): Promise<boolean> {
     .catch(() => false);
 }
 
-export async function parseInventoryFile(file: File): Promise<ParsedImport> {
-  const fallbackName = fileBaseName(file.name);
+/* ------------------------------------------------------------------ */
+/* Full-account backup                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface ParsedAccountInventory {
+  docId: string;
+  name: string;
+  parsed: ParsedImport;
+}
+
+export interface ParsedAccount {
+  manifest: AccountManifest;
+  /** Identity, profile-doc handle and inventory tokens, as in a backup link. */
+  backup: DecodedBackup;
+  inventories: ParsedAccountInventory[];
+  /** Inventories listed in the manifest whose files could not be read. */
+  unreadable: number;
+}
+
+/**
+ * Reads a full-account backup. Returns null when the archive is not one (so
+ * the caller can fall back to a plain inventory import); throws only when it
+ * IS one but is broken.
+ */
+export async function parseAccountZip(zip: JSZip): Promise<ParsedAccount | null> {
+  const manifestEntry = zip.file(ACCOUNT_MANIFEST_NAME);
+  if (!manifestEntry) return null;
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(await manifestEntry.async('string'));
+  } catch {
+    throw new Error('This account backup has an unreadable account.json');
+  }
+  if (!isAccountManifest(manifest)) return null;
+
+  const backup = decodeBackup(manifest.backup);
+  if (!backup) throw new Error('This account backup carries no usable account data');
+
+  const inventories: ParsedAccountInventory[] = [];
+  let unreadable = 0;
+  for (const entry of manifest.inventories) {
+    if (typeof entry?.docId !== 'string' || !entry.docId) continue;
+    const folder = entry.folder || `inventories/${entry.docId}`;
+    try {
+      const parsed = await parseInventoryFolder(zip, folder, entry.name || entry.docId);
+      inventories.push({ docId: entry.docId, name: entry.name || parsed.snapshot.meta.name, parsed });
+    } catch {
+      // A missing or corrupt folder must not sink the whole restore: the
+      // account handles still come back, and sync can refill the contents.
+      unreadable += 1;
+    }
+  }
+
+  return { manifest, backup, inventories, unreadable };
+}
+
+export type ParsedFile =
+  | { kind: 'inventory'; parsed: ParsedImport }
+  | { kind: 'account'; account: ParsedAccount };
+
+/** Dispatches a dropped/picked data file: account backup or single inventory. */
+export async function parseImportFile(file: File): Promise<ParsedFile> {
+  if (await looksLikeZip(file)) {
+    const zip = await loadZip(file);
+    const account = await parseAccountZip(zip);
+    if (account) return { kind: 'account', account };
+    return { kind: 'inventory', parsed: await parseInventoryFolder(zip, '', fileBaseName(file.name)) };
+  }
+  return { kind: 'inventory', parsed: await parseInventoryFile(file) };
+}
+
+async function looksLikeZip(file: File): Promise<boolean> {
   const lowerName = file.name.toLowerCase();
-  const looksLikeZip =
+  return (
     lowerName.endsWith('.zip') ||
     file.type === 'application/zip' ||
     file.type === 'application/x-zip-compressed' ||
-    (await hasZipSignature(file));
+    (await hasZipSignature(file))
+  );
+}
 
-  if (looksLikeZip) return parseZip(file, fallbackName);
+export async function parseInventoryFile(file: File): Promise<ParsedImport> {
+  const fallbackName = fileBaseName(file.name);
+  if (await looksLikeZip(file)) return parseZip(file, fallbackName);
 
   let source: string;
   try {

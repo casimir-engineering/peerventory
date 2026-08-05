@@ -640,7 +640,57 @@ export async function importSnapshot(
     ownerTrackingEnabled: snap.meta.ownerTrackingEnabled ?? true,
     preciseLocation: snap.meta.preciseLocation,
   });
-  const docId = handle.docId;
+  await writeSnapshotInto(handle.docId, snap, photoBlobs);
+  return handle.docId;
+}
+
+/**
+ * Restore an inventory's CONTENTS into the doc it already belongs to (full
+ * account backup: the tokens and the content key came back with the account,
+ * the data comes from the archive). Refuses when the doc already holds
+ * content on this device: replaying an old snapshot over a live doc would
+ * resurrect deleted items and overwrite newer edits — that copy is either
+ * already correct or will be corrected by sync.
+ *
+ * Photo hashes are stable for a given content key (see photos.ts), so
+ * re-adding the archived blobs reproduces the same refs the other devices
+ * already have instead of duplicating them.
+ */
+export async function restoreSnapshotInto(
+  docId: Id,
+  snap: InventorySnapshot,
+  photoBlobs: Map<string, Blob>,
+): Promise<'restored' | 'already-present' | 'readonly'> {
+  const handle = getStoredHandle(docId);
+  if (!handle) throw new Error('restoreSnapshotInto: unknown inventory');
+  if (handle.readonly || !handle.rwToken) return 'readonly';
+
+  const entry = openDoc(docId);
+  await entry.idb.whenSynced;
+  const hasContent =
+    entry.doc.getMap<unknown>('meta').has('id') ||
+    entry.doc.getMap<unknown>('items').size > 0;
+  if (hasContent) return 'already-present';
+
+  entry.doc.transact(() => {
+    const meta = entry.doc.getMap<unknown>('meta');
+    meta.set('id', docId);
+    meta.set('name', snap.meta.name || handle.name || 'Restored inventory');
+    meta.set('createdAt', snap.meta.createdAt || Date.now());
+    meta.set('ownerTrackingEnabled', snap.meta.ownerTrackingEnabled ?? true);
+    meta.set('currency', snap.meta.currency || 'USD');
+    meta.set('preciseLocation', snap.meta.preciseLocation ?? true);
+  });
+  await writeSnapshotInto(docId, snap, photoBlobs);
+  return 'restored';
+}
+
+/** Items, boxes, lists, owners and photos of a snapshot into an open doc. */
+async function writeSnapshotInto(
+  docId: Id,
+  snap: InventorySnapshot,
+  photoBlobs: Map<string, Blob>,
+): Promise<void> {
   const entry = openDoc(docId);
 
   entry.doc.transact(() => {
@@ -674,7 +724,5 @@ export async function importSnapshot(
       }
     }
   }
-
-  return docId;
 }
 

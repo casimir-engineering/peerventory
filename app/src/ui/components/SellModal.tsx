@@ -7,18 +7,21 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { getAiKey } from '../../services';
 import type { Item } from '../../types';
 import {
   buildAiDraft,
   buildPayload,
   buildTemplateDraft,
-  downloadListingPhotos,
+  collectListingPhotos,
+  downloadPhotoFiles,
   payloadJson,
   payloadText,
 } from '../lib/listing';
 import type { ListingDraft } from '../lib/listing';
 import { copyToClipboard } from '../lib/links';
+import { useFileSaver } from '../lib/saveFile';
 import { Modal } from './Modal';
 import { Spinner } from './Common';
 import { useToast } from './Toast';
@@ -35,6 +38,7 @@ export function SellModal({
   onClose: () => void;
 }) {
   const { toast, toastError } = useToast();
+  const { saveFiles } = useFileSaver();
   const [draft, setDraft] = useState<ListingDraft>(() => buildTemplateDraft(item, mainCurrency));
   const [aiBusy, setAiBusy] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
@@ -71,15 +75,26 @@ export function SellModal({
     else toastError('Copy failed — your browser blocked clipboard access');
   };
 
-  const downloadPhotos = async () => {
+  const exportPhotos = async () => {
     if (photoBusy) return;
     setPhotoBusy(true);
     try {
-      const saved = await downloadListingPhotos(docId, item);
-      if (saved === 0) toastError('No photos are downloaded to this device yet');
-      else toast(`${saved} photo${saved === 1 ? '' : 's'} saved`);
+      const files = await collectListingPhotos(docId, item);
+      if (files.length === 0) {
+        toastError('No photos are downloaded to this device yet');
+        return;
+      }
+      if (Capacitor.isNativePlatform()) {
+        // One sheet with every photo; an anchor download saves nothing here.
+        await saveFiles(files, `${files.length} photo${files.length === 1 ? '' : 's'}`);
+      } else {
+        // Loose files on disk: the extension workflow drags them into the
+        // listing form, which a share dialog cannot do.
+        await downloadPhotoFiles(files);
+        toast(`${files.length} photo${files.length === 1 ? '' : 's'} downloaded`);
+      }
     } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Photo download failed');
+      toastError(err instanceof Error ? err.message : 'Photo export failed');
     } finally {
       setPhotoBusy(false);
     }
@@ -196,9 +211,10 @@ export function SellModal({
             type="button"
             className="btn"
             disabled={photoBusy || photoCount === 0}
-            onClick={() => void downloadPhotos()}
+            onClick={() => void exportPhotos()}
           >
-            {photoBusy ? <Spinner /> : null} Download photos ({photoCount})
+            {photoBusy ? <Spinner /> : null}{' '}
+            {Capacitor.isNativePlatform() ? 'Share photos' : 'Download photos'} ({photoCount})
           </button>
         </div>
 

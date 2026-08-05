@@ -1,17 +1,11 @@
 import { useState } from 'react';
 import { getPhotoBlob, snapshotInventory } from '../../store';
-import {
-  downloadBlob,
-  downloadText,
-  inventoryToXlsx,
-  inventoryToYaml,
-  inventoryToZip,
-  shareOrDownloadFile,
-} from '../../export';
+import { inventoryToXlsx, inventoryToYaml, inventoryToZip } from '../../export';
 import { ensureRates } from '../../services/currency';
 import type { Id, InventorySnapshot, PhotoRef } from '../../types';
 import { safeFilename } from '../lib/format';
 import { makeExportThumb } from '../lib/image';
+import { useFileSaver } from '../lib/saveFile';
 import { Spinner } from './Common';
 import { useToast } from './Toast';
 
@@ -32,7 +26,8 @@ export function ExportButtons({
   itemIds?: Id[];
   selectionLabel?: string;
 }) {
-  const { toast, toastError } = useToast();
+  const { toastError } = useToast();
+  const { saveFile } = useFileSaver();
   const [busy, setBusy] = useState<ExportKind | null>(null);
   const base = safeFilename(inventoryName);
 
@@ -42,8 +37,10 @@ export function ExportButtons({
     try {
       const snapshot: InventorySnapshot = await snapshotInventory(docId);
       if (kind === 'yaml') {
-        downloadText(inventoryToYaml(snapshot), `${base}.yaml`);
-        toast('Export ready');
+        const blob = new Blob([inventoryToYaml(snapshot)], {
+          type: 'text/yaml;charset=utf-8',
+        });
+        await saveFile(blob, `${base}.yaml`, 'YAML export');
       } else if (kind === 'xlsx') {
         // Totals are converted to the inventory currency; make sure FX rates
         // are cached (never throws, degrades to per-currency totals offline).
@@ -53,12 +50,10 @@ export function ExportButtons({
           return photoBlob ? makeExportThumb(photoBlob) : null;
         };
         const blob = await inventoryToXlsx(snapshot, itemIds, loadPhoto);
-        const outcome = await shareOrDownloadFile(blob, `${base}.xlsx`, inventoryName);
-        toast(outcome === 'shared' ? 'Export shared' : 'Export downloaded');
+        await saveFile(blob, `${base}.xlsx`, 'Spreadsheet');
       } else {
         const blob = await inventoryToZip(snapshot, (hash: string) => getPhotoBlob(docId, hash));
-        downloadBlob(blob, `${base}.zip`);
-        toast('Export ready');
+        await saveFile(blob, `${base}.zip`, 'Archive ZIP');
       }
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Export failed');

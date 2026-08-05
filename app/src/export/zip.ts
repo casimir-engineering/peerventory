@@ -23,14 +23,21 @@ function extensionForMime(mime: string): string {
   }
 }
 
-export async function inventoryToZip(
+/**
+ * Writes one inventory (YAML manifest + every photo we hold + the photo
+ * index) into `folder` of an open archive. Shared by the per-inventory ZIP
+ * export and the full-account backup, so both produce the same layout and
+ * the importer only has to understand one.
+ */
+export async function addInventoryToZip(
+  zip: JSZip,
+  folder: string,
   snap: InventorySnapshot,
   getPhotoBlob: (hash: string) => Promise<Blob | null>,
-): Promise<Blob> {
-  const zip = new JSZip();
-  zip.file('inventory.yaml', inventoryToYaml(snap));
+): Promise<{ photos: number }> {
+  const prefix = folder ? `${folder.replace(/\/$/, '')}/` : '';
+  zip.file(`${prefix}inventory.yaml`, inventoryToYaml(snap));
 
-  const manifestPromise = inventoryToXlsx(snap);
   const uniquePhotos = new Map<string, string>();
   for (const item of snap.items) {
     for (const photo of item.photos) {
@@ -45,7 +52,7 @@ export async function inventoryToZip(
     [...uniquePhotos.entries()].map(async ([hash, path]) => {
       const blob = await getPhotoBlob(hash);
       if (blob) {
-        zip.file(path, blob);
+        zip.file(prefix + path, blob);
         availablePhotoPaths.set(hash, path);
       }
     }),
@@ -60,12 +67,26 @@ export async function inventoryToZip(
       }),
     ]),
   );
-  zip.file('photo-index.yaml', stringify(photoIndex, { lineWidth: 100 }));
-  zip.file('manifest.xlsx', await manifestPromise);
+  zip.file(`${prefix}photo-index.yaml`, stringify(photoIndex, { lineWidth: 100 }));
 
+  return { photos: availablePhotoPaths.size };
+}
+
+export function generateZip(zip: JSZip): Promise<Blob> {
   return zip.generateAsync({
     type: 'blob',
     compression: 'DEFLATE',
     compressionOptions: { level: 6 },
   });
+}
+
+export async function inventoryToZip(
+  snap: InventorySnapshot,
+  getPhotoBlob: (hash: string) => Promise<Blob | null>,
+): Promise<Blob> {
+  const zip = new JSZip();
+  const manifestPromise = inventoryToXlsx(snap);
+  await addInventoryToZip(zip, '', snap, getPhotoBlob);
+  zip.file('manifest.xlsx', await manifestPromise);
+  return generateZip(zip);
 }

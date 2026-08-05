@@ -5,6 +5,7 @@ export {
   snapshotInventory,
   getHandle,
   importSnapshot,
+  restoreSnapshotInto,
   reopenEncryptedDoc,
   replicateToMyRelays,
 } from './hooks';

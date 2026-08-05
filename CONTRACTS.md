@@ -208,6 +208,27 @@ Design alternatives considered (decision record):
     a saved PNG (decoded from clean pixels), never as an on-screen QR.
   Decoders accept both: a link token is a payload with no handles. A payload
   with neither handles nor `p` is rejected.
+- FULL ACCOUNT BACKUP (`.zip`, `app/src/export/account.ts`): access AND data,
+  for restoring with no relay in reach. Layout:
+
+  ```
+  account.json                          { schema: 'peerventory-account', version: 1,
+                                          exportedAt, name?, ownerId?, backup: <v2 payload>,
+                                          relays: [...], inventories: [{ docId, name, folder,
+                                          items, photos }] }
+  README.txt
+  inventories/<docId>/inventory.yaml    same document as a single-inventory export
+  inventories/<docId>/photos/<hash>.<ext>
+  inventories/<docId>/photo-index.yaml
+  ```
+
+  Restore = `importBackup(decodeBackup(account.backup))` (identical merge
+  semantics to the QR/link, including the "switch account?" confirmation)
+  followed by writing each inventory's contents back into its own docId.
+  Contents are only written into a doc that is EMPTY on this device: replaying
+  an archived snapshot over a live doc would resurrect deleted items. Photo
+  hashes are reproducible for a given content key, so re-adding archived blobs
+  recreates the same refs instead of duplicates.
 
 ## Blob API (photos)
 
