@@ -212,8 +212,14 @@ export interface InventoryHandle {
   /** Cached display name for the list screen */
   name?: string;
   readonly: boolean;
-  /** Epoch ms of the last completed sync with the relay on this device. */
+  /** Epoch ms of the last completed sync with a relay on this device. */
   lastSyncedAt?: number;
+  /**
+   * Relay origins (https://host) this doc is known to live on. Absent/empty =
+   * the device's default relay. Share-link origins and "replicate to my
+   * relays" add entries; no single global server is assumed.
+   */
+  relays?: string[];
 }
 
 /** A device that wrote to this inventory, recorded in the doc's `devices` map. */

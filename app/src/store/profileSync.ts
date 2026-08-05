@@ -31,12 +31,17 @@
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
-import { getServerConfig } from '../config';
 import type { Id } from '../types';
 import type { SyncStatus } from './contract';
 import { E2eSync } from './e2ee';
 import { sha256Hex } from './ids';
 import { closeDoc, openDoc } from './docs';
+import {
+  enabledRelayOrigins,
+  mergeRelayLists,
+  relayWsUrl,
+  subscribeRelays,
+} from './relays';
 import {
   getHandlesSnapshot,
   getStoredHandle,
@@ -76,6 +81,8 @@ interface ProfileInvEntry {
   ek?: string;
   /** Cached display name. */
   nm?: string;
+  /** Relay origins the inventory is known to live on (union-merged). */
+  rl?: string[];
   /** Tombstone: the inventory was left/forgotten on some device. */
   removed?: boolean;
   /** epoch ms of the last write (informational; Y.Map resolves conflicts). */
@@ -87,7 +94,8 @@ interface Engine {
   doc: Y.Doc;
   idb: IndexeddbPersistence;
   e2ee: E2eSync;
-  provider: HocuspocusProvider | null;
+  /** One provider per enabled relay: the profile doc lives on all of them. */
+  providers: Map<string, { provider: HocuspocusProvider; status: SyncStatus }>;
   /** Local load done + first server sync attempt settled: safe to push. */
   ready: boolean;
   destroyed: boolean;
@@ -140,9 +148,12 @@ function stopEngine(): void {
   clearTimeout(e.pushTimer);
   clearTimeout(e.readyTimer);
   for (const unsub of e.unsubs) unsub();
-  try {
-    e.provider?.destroy();
-  } catch { /* ignore */ }
+  for (const conn of e.providers.values()) {
+    try {
+      conn.provider.destroy();
+    } catch { /* ignore */ }
+  }
+  e.providers.clear();
   void e.e2ee.destroy();
   void e.idb.destroy().catch(() => {});
   e.doc.destroy();
@@ -160,7 +171,7 @@ function openEngine(handle: ProfileDocHandle): void {
     doc,
     idb,
     e2ee,
-    provider: null,
+    providers: new Map(),
     ready: false,
     destroyed: false,
     unsubs: [],
@@ -188,8 +199,11 @@ function openEngine(handle: ProfileDocHandle): void {
       schedulePush(e);
     }),
   );
+  // The profile doc follows the device relay set: connect to added relays,
+  // drop removed/disabled ones.
+  e.unsubs.push(subscribeRelays(() => reconcileProviders(e)));
 
-  attachProvider(e);
+  attachProviders(e);
 }
 
 function markReady(e: Engine): void {
@@ -199,12 +213,18 @@ function markReady(e: Engine): void {
   schedulePush(e);
 }
 
-/* ---------------- relay provider (mirrors docs.ts, simplified) ---------------- */
+/* ---------------- relay providers (mirrors docs.ts, simplified) ---------------- */
 
+/**
+ * Unlike inventory docs, the profile doc always carries the create payload
+ * when both tokens are known: its tokens were minted locally (or came from
+ * this same user's backup), so replicating it onto every enabled relay via
+ * the create-handshake is always safe.
+ */
 async function buildToken(): Promise<string> {
   const h = getProfileDocHandle();
   const t = h?.rwToken ?? h?.roToken ?? '';
-  if (h?.pendingCreate && h.rwToken && h.roToken) {
+  if (h?.rwToken && h.roToken) {
     return JSON.stringify({
       t,
       create: {
@@ -216,21 +236,52 @@ async function buildToken(): Promise<string> {
   return JSON.stringify({ t });
 }
 
-function attachProvider(e: Engine): void {
+function recomputeStatus(e: Engine): void {
+  const statuses = [...e.providers.values()].map((p) => p.status);
+  if (statuses.includes('synced')) setStatus('synced');
+  else if (statuses.includes('connecting')) setStatus('connecting');
+  else if (statuses.includes('error')) setStatus('error');
+  else setStatus('offline');
+}
+
+function attachProviders(e: Engine): void {
+  for (const origin of enabledRelayOrigins()) {
+    if (!e.providers.has(origin)) attachProvider(e, origin);
+  }
+}
+
+function reconcileProviders(e: Engine): void {
+  const targets = new Set(enabledRelayOrigins());
+  for (const [origin, conn] of e.providers) {
+    if (targets.has(origin)) continue;
+    try {
+      conn.provider.destroy();
+    } catch { /* ignore */ }
+    e.providers.delete(origin);
+  }
+  attachProviders(e);
+  recomputeStatus(e);
+}
+
+function attachProvider(e: Engine, origin: string): void {
   try {
-    e.provider = new HocuspocusProvider({
-      url: getServerConfig().wsUrl,
+    const provider = new HocuspocusProvider({
+      url: relayWsUrl(origin),
       name: e.handle.docId,
       document: e.e2ee.outer,
       token: () => buildToken(),
       onStatus: ({ status: s }) => {
-        if (status === 'error') return;
-        if (s === WebSocketStatus.Connecting) setStatus('connecting');
-        else if (s === WebSocketStatus.Disconnected) setStatus('offline');
+        const conn = e.providers.get(origin);
+        if (!conn || conn.status === 'error') return;
+        if (s === WebSocketStatus.Connecting) conn.status = 'connecting';
+        else if (s === WebSocketStatus.Disconnected) conn.status = 'offline';
+        recomputeStatus(e);
       },
       onSynced: ({ state }) => {
         if (!state) return;
-        setStatus('synced');
+        const conn = e.providers.get(origin);
+        if (conn) conn.status = 'synced';
+        recomputeStatus(e);
         e.e2ee.onServerSynced();
         markReady(e);
       },
@@ -240,17 +291,21 @@ function attachProvider(e: Engine): void {
         }
       },
       onAuthenticationFailed: ({ reason }) => {
-        console.warn(`[profile-sync] auth failed: ${reason}`);
-        setStatus('error');
-        // Deterministic rejection: stop the reconnect loop for this session.
-        e.provider?.disconnect();
+        console.warn(`[profile-sync] auth failed on ${origin}: ${reason}`);
+        const conn = e.providers.get(origin);
+        if (conn) {
+          conn.status = 'error';
+          // Deterministic rejection: stop this relay's reconnect loop.
+          conn.provider.disconnect();
+        }
+        recomputeStatus(e);
         markReady(e);
       },
     });
-    setStatus('connecting');
+    e.providers.set(origin, { provider, status: 'connecting' });
+    recomputeStatus(e);
   } catch (err) {
-    console.warn('[profile-sync] failed to start provider', err);
-    e.provider = null;
+    console.warn(`[profile-sync] failed to start provider for ${origin}`, err);
   }
 }
 
@@ -281,13 +336,29 @@ function applyDocToLocal(e: Engine): void {
   }
 
   const map = e.doc.getMap<ProfileInvEntry>(INV_MAP);
-  const live: Array<{ docId: string; rwToken?: string; roToken?: string; key?: string; name?: string }> = [];
+  const live: Array<{
+    docId: string;
+    rwToken?: string;
+    roToken?: string;
+    key?: string;
+    name?: string;
+    relays?: string[];
+  }> = [];
   const removed: string[] = [];
   map.forEach((_v, docId) => {
     const entry = readEntry(map, docId);
     if (!entry || entry.d === e.handle.docId) return;
     if (entry.removed) removed.push(entry.d);
-    else live.push({ docId: entry.d, rwToken: entry.rw, roToken: entry.ro, key: entry.ek, name: entry.nm });
+    else {
+      live.push({
+        docId: entry.d,
+        rwToken: entry.rw,
+        roToken: entry.ro,
+        key: entry.ek,
+        name: entry.nm,
+        relays: Array.isArray(entry.rl) ? entry.rl : undefined,
+      });
+    }
   });
 
   const known = new Set(getHandlesSnapshot().map((h) => h.docId));
@@ -318,7 +389,12 @@ function schedulePush(e: Engine): void {
 
 function sameEntry(a: ProfileInvEntry, b: ProfileInvEntry): boolean {
   return (
-    a.rw === b.rw && a.ro === b.ro && a.ek === b.ek && a.nm === b.nm && !a.removed === !b.removed
+    a.rw === b.rw &&
+    a.ro === b.ro &&
+    a.ek === b.ek &&
+    a.nm === b.nm &&
+    !a.removed === !b.removed &&
+    (a.rl ?? []).join(' ') === (b.rl ?? []).join(' ')
   );
 }
 
@@ -349,10 +425,14 @@ function pushLocalToDoc(e: Engine): void {
       const ro = h.roToken ?? existing?.ro;
       const ek = h.key ?? existing?.ek;
       const nm = h.name ?? existing?.nm;
+      // Relay lists union-merge: a device can add relays, never remove them
+      // through the profile doc (removal stays a local decision).
+      const rl = mergeRelayLists(existing?.rl, h.relays);
       if (rw) next.rw = rw;
       if (ro) next.ro = ro;
       if (ek) next.ek = ek;
       if (nm) next.nm = nm;
+      if (rl.length > 0) next.rl = rl;
       if (existing && sameEntry(existing, next)) continue;
       map.set(h.docId, next);
     }

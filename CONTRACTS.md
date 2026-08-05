@@ -29,6 +29,76 @@ contract lives in `app/src/types.ts`; the store<->UI contract in `app/src/store/
   unchanged. The server is content-agnostic and must never inspect doc
   content — from its point of view every doc is just Yjs bytes.
 
+## Multi-relay replication
+
+Relays are interchangeable dumb encrypted mailboxes. Nothing in the protocol
+assumes a single global server, and relays never talk to each other —
+replication happens through clients.
+
+- Tokens and the content key are RELAY-AGNOSTIC by design: a token is just a
+  per-doc access password whose sha256 hash a relay stores at doc-creation
+  time, and the relay only ever guards ciphertext. The same `{rwToken,
+  roToken, key}` triple is therefore valid on every relay the doc is pushed
+  to; there is no per-relay credential.
+- Registration on an additional relay reuses the create-handshake above: a
+  client whose rw token is server-confirmed (or still pending creation)
+  ALWAYS sends the `create: {rwHash, roHash}` payload. A relay that already
+  knows the doc ignores it; a relay that does not stores the hashes and
+  grants rw. "Replicate to relay B" is thus simply "connect to relay B" —
+  the client's Hocuspocus provider then pushes the full encrypted state.
+  (Replication requires holding BOTH tokens: the ro hash must be registered
+  along with the rw hash. Read-only holders cannot introduce a doc to a new
+  relay.)
+- Client relay set (`app/src/store/relays.ts`): each device keeps a list of
+  relay origins (localStorage `relays:v1`, `{url, enabled}`), seeded with the
+  configured default. Each `InventoryHandle` carries `relays: string[]` — the
+  origins the doc is known to live on. A share link's origin is *a* relay
+  hint recorded at join time, not "the" server.
+- Connection layer (`docs.ts`): every open doc runs ONE HocuspocusProvider
+  PER configured relay on the same outer Y.Doc — Yjs updates dedupe by
+  design, so multi-homing is safe and keeps all relays converged while at
+  least one shared client is online. Doc status aggregates per-relay states
+  (synced anywhere = synced). Read-only/downgrade verdicts from one relay are
+  ignored while another relay grants rw (relays share token hashes by
+  construction; disagreement means a stale or hostile relay).
+- Blobs: uploads go to EVERY relay of the doc (the upload queue tracks
+  per-origin completion); downloads try the relays in order and take the
+  first hit.
+- The profile doc (see "Synced profile") always connects to every enabled
+  relay and always sends the create payload (its tokens are minted locally,
+  so self-registration is always safe). Inventory entries in the profile doc
+  carry `rl: string[]` (union-merged, add-only), so relay hints propagate
+  across a user's devices.
+
+## Direct device-to-device sync (WebRTC)
+
+Devices holding the same inventory sync directly (LAN or NAT-permitting)
+via y-webrtc on the OUTER (encrypted) doc — the exact bytes a relay would
+see, decrypted through the same e2ee pipeline. Zero reachable relays still
+sync if the P2P link is already established; see the limitation below.
+
+- Signaling NEVER uses public y-webrtc servers (that is why P2P was removed
+  once before). Each relay exposes a `/signal` WebSocket endpoint
+  (`server/src/signaling.ts`) speaking y-webrtc's pub/sub protocol
+  (`subscribe`/`unsubscribe`/`publish`/`ping` JSON messages on topic names).
+  Clients use `wss://<relay>/signal` of every ENABLED relay.
+- Room privacy: the room name is
+  `base64url(HMAC-SHA256(contentKey, "peerventory:webrtc-room:" + docId))` —
+  unguessable without the E2E content key — and y-webrtc's room password
+  (`base64url(HMAC-SHA256(contentKey, "peerventory:webrtc-pw:" + docId))`)
+  additionally AES-GCM-encrypts all signaling payloads. The signaling server
+  learns only: opaque room ids, peer IPs, timing, and encrypted SDP blobs.
+  Strangers on the signaling server can neither discover nor join a doc's
+  room; devices without the content key (including token-only relays-of-
+  convenience) cannot participate.
+- ICE: simple-peer defaults (public STUN for NAT traversal; STUN servers see
+  IPs only, never data). On a shared LAN, host candidates suffice.
+- Toggle: "Direct device-to-device sync", localStorage `p2p:v1`, default ON.
+  UI shows the live direct-peer count per inventory.
+- Limitation (accepted): signaling-via-own-relay IS the discovery mechanism.
+  If two devices can reach no common relay at the moment of introduction,
+  they cannot find each other (mDNS/local discovery is out of scope).
+
 ## End-to-end encryption
 
 The relay protocol is E2E-only for clients: every inventory is end-to-end
@@ -156,9 +226,14 @@ server never sees image contents or the real mime type.
 ## Client server-config
 
 `app/src/config.ts` exports `getServerConfig(): { wsUrl: string; httpUrl: string }`.
-Defaults derive from `import.meta.env.VITE_SERVER_ORIGIN` (e.g. `https://inv.example.com`),
+Defaults derive from localStorage `serverOrigin` (runtime override, used by the
+APK), then `import.meta.env.VITE_SERVER_ORIGIN` (e.g. `https://inv.example.com`),
 falling back to `window.location.origin`. `wsUrl = origin.replace(/^http/, 'ws') + '/sync'`,
 `httpUrl = origin + '/api'`.
+
+This configured origin is only the DEFAULT relay that seeds the device relay
+set (see "Multi-relay replication"); all live connections resolve through
+`store/relays.ts`, never through a single global origin.
 
 ## Client services (app/src/services/) — v2 features
 
@@ -190,10 +265,11 @@ server changes.
   - `Y.Map('profile')`: `{ name?: string, ownerId?: string }` — the display
     name syncs (doc wins on sync; an explicit local rename pushes); ownerId
     is fill-only, same rule as backup import.
-  - `Y.Map('inventories')`: `docId -> { d, rw?, ro?, ek?, nm?, removed?,
-    at }` — one plain-object entry per inventory keyed by docId, so
-    concurrent list edits merge per inventory (LWW per entry). The AI key is
-    NEVER stored here.
+  - `Y.Map('inventories')`: `docId -> { d, rw?, ro?, ek?, nm?, rl?,
+    removed?, at }` — one plain-object entry per inventory keyed by docId, so
+    concurrent list edits merge per inventory (LWW per entry). `rl` is the
+    inventory's relay-origin list (union-merged on push, add-only — see
+    "Multi-relay replication"). The AI key is NEVER stored here.
 - Mirroring: doc -> registry goes through `importHandles` (never downgrades
   access); newly arrived handles are opened immediately so the inventory
   materializes through normal sync. Registry -> doc is a debounced fill-only
@@ -279,6 +355,9 @@ nothing about it and needs no changes for it.
 
 Single VPS, Docker Compose (`deploy/`):
 - `caddy` terminates TLS on 443, serves the built PWA static files, reverse-proxies
-  `/sync` (websocket) and `/api/*` to the node service.
-- `server` (node) runs Hocuspocus + blob API on internal port 8787.
+  `/sync` and `/signal` (websockets) and `/api/*` to the node service.
+- `server` (node) runs Hocuspocus + blob API + WebRTC signaling on internal port 8787.
 - Volumes: `server/data` (docs + blobs), caddy data (certs).
+
+Anyone can run additional relays the same way (each is fully independent and
+knows nothing about the others); see README "Self-hosting a relay".

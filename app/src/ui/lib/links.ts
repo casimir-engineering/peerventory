@@ -5,6 +5,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import type { Id, InventoryHandle } from '../../types';
+import { relayOriginsForDoc } from '../../store/relays';
 
 export type LinkTarget =
   | { kind: 'inventory' }
@@ -46,10 +47,16 @@ export function appBaseUrl(): string {
  * For end-to-end encrypted inventories the content key rides along as
  * `/k/<base64url>` INSIDE the hash fragment: fragments are never sent to any
  * server, so the relay cannot learn the key from the link.
+ *
+ * The link is based on one of the relays the DOC lives on (each relay also
+ * serves the app), so the receiver both loads the app and gets a valid relay
+ * hint even when their default relay differs from ours.
  */
 export function buildShareUrl(docId: Id, token: string, target: LinkTarget, key?: string): string {
   const keyPart = key ? `/k/${key}` : '';
-  return `${appBaseUrl()}#/join/${docId}/${token}${keyPart}${targetSuffix(target)}`;
+  const docRelay = relayOriginsForDoc(docId)[0];
+  const base = docRelay ? docRelay + '/' : appBaseUrl();
+  return `${base}#/join/${docId}/${token}${keyPart}${targetSuffix(target)}`;
 }
 
 /** Device-backup restore link (identity + all inventory tokens). */
@@ -81,20 +88,36 @@ export interface ParsedShareLink {
   key?: string;
   /** '' | '/i/<id>' | '/l/<id.id>' | '/sl/<id>' */
   suffix: string;
+  /**
+   * http(s) origin the link pointed at, when the input carried one. It is a
+   * RELAY HINT (a relay the doc is known to live on), not "the" server —
+   * callers stash it via rememberRelayHint() so the join flow records it.
+   */
+  origin?: string;
 }
 
 const JOIN_RE =
   /\/join\/([^/\s#?]+)\/([^/\s#?]+)(?:\/k\/([A-Za-z0-9_-]+))?((?:\/(?:i|l|sl)\/[^/\s#?]+)?)/;
 
+const ORIGIN_RE = /^(https?:\/\/[^/#?\s]+)/i;
+
 /**
  * Accepts a full share URL, a bare `#/join/...` fragment, or a `/join/...` path.
  */
 export function parseShareLink(input: string): ParsedShareLink | null {
-  const match = JOIN_RE.exec(input.trim());
+  const trimmed = input.trim();
+  const match = JOIN_RE.exec(trimmed);
   if (!match) return null;
   const [, docId, token, key, suffix] = match;
   if (!docId || !token) return null;
-  return { docId, token, key: key || undefined, suffix: suffix ?? '' };
+  const origin = ORIGIN_RE.exec(trimmed)?.[1];
+  return {
+    docId,
+    token,
+    key: key || undefined,
+    suffix: suffix ?? '',
+    origin: origin || undefined,
+  };
 }
 
 /** Route to navigate to after a link is pasted (the join route handles the rest). */

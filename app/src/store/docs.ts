@@ -1,30 +1,50 @@
 /**
- * Per-inventory Y.Doc lifecycle: y-indexeddb persistence, Hocuspocus sync
- * provider (with the create-handshake from CONTRACTS.md), optional y-webrtc
- * LAN sync, and reactive per-doc sync status.
+ * Per-inventory Y.Doc lifecycle: y-indexeddb persistence, one Hocuspocus sync
+ * provider per configured relay (with the create-handshake from CONTRACTS.md),
+ * direct device-to-device WebRTC sync (p2p.ts), and reactive per-doc status.
+ *
+ * Multi-relay: every relay a doc is configured for (relays.ts) gets its own
+ * provider on the SAME outer Y.Doc — Yjs updates dedupe by design, so
+ * connecting to several relays at once is safe and gives automatic
+ * replication between them (through this client).
  */
 import * as Y from 'yjs';
 import { IndexeddbPersistence, clearDocument } from 'y-indexeddb';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
-import type { WebrtcProvider } from 'y-webrtc';
-import { getServerConfig } from '../config';
 import type { Box, DevicePresence, Id, InventoryMeta, Item, SavedList } from '../types';
 import type { SyncStatus } from './contract';
 import { getDevicePresence } from './device';
 import { clearOuterDoc, E2eSync, E2EE_REMOTE_ORIGIN, ENC_LOG_NAME } from './e2ee';
 import { sha256Hex } from './ids';
 import { ensureSelfOwner } from './owners';
+import { attachP2p, subscribeP2p, type P2pConn } from './p2p';
 import { getStoredHandle, updateHandle } from './registry';
+import { relayOriginsForDoc, relayWsUrl, subscribeRelays } from './relays';
 // Direct module import (not the services barrel), cycle-free: profile only
 // imports types and the leaf modules store/ids + store/crypto.
 import { subscribeOwnerName } from '../services/profile';
+
+/** One Hocuspocus provider bound to one relay origin. */
+export interface RelayConn {
+  origin: string;
+  provider: HocuspocusProvider;
+  status: SyncStatus;
+  /** Access level this relay granted during this session, once known. */
+  scope?: 'rw' | 'ro';
+}
 
 export interface DocEntry {
   docId: Id;
   doc: Y.Doc;
   idb: IndexeddbPersistence;
-  provider: HocuspocusProvider | null;
-  webrtc: WebrtcProvider | null;
+  /** One connection per relay origin the doc syncs through. */
+  conns: Map<string, RelayConn>;
+  /** Direct WebRTC sync (signaling via own relays); null while off/unavailable. */
+  p2p: P2pConn | null;
+  /** Number of directly connected WebRTC peers. */
+  peerCount: number;
+  /** Guards async p2p attach against stale completions. */
+  p2pGen: number;
   /** Encrypted-sync bridge; set when the handle stores a content key. */
   e2ee: E2eSync | null;
   /**
@@ -71,10 +91,31 @@ function bump(entry: DocEntry): void {
   for (const cb of listenersFor(entry.docId)) cb();
 }
 
-function setStatus(entry: DocEntry, status: SyncStatus): void {
-  if (entry.status === status) return;
-  entry.status = status;
+/**
+ * Aggregate the per-relay statuses into the doc status the UI shows:
+ * synced anywhere counts as synced; a live attempt beats a dead relay.
+ */
+function recomputeStatus(entry: DocEntry): void {
+  const statuses = [...entry.conns.values()].map((c) => c.status);
+  let next: SyncStatus = 'offline';
+  if (statuses.includes('synced')) next = 'synced';
+  else if (statuses.includes('connecting')) next = 'connecting';
+  else if (statuses.includes('error')) next = 'error';
+  if (entry.status !== next) {
+    entry.status = next;
+  }
   bump(entry);
+}
+
+function setConnStatus(entry: DocEntry, conn: RelayConn, status: SyncStatus): void {
+  if (conn.status === status) return;
+  conn.status = status;
+  recomputeStatus(entry);
+}
+
+/** Whether any relay granted read-write scope this session. */
+function anyRwConn(entry: DocEntry): boolean {
+  return [...entry.conns.values()].some((c) => c.scope === 'rw');
 }
 
 /** Docs that already used their one automatic candidate-swap after an auth
@@ -144,12 +185,18 @@ function recordOwner(entry: DocEntry): void {
   }
 }
 
-/** Auth token per CONTRACTS.md: JSON string, with `create` payload while the
- *  server hasn't accepted a locally-created doc yet. */
+/**
+ * Auth token per CONTRACTS.md: JSON string, with a `create` payload while the
+ * doc is pending creation — and also once our rw token is server-confirmed,
+ * which is what lets a doc be REGISTERED on additional relays: a relay that
+ * does not know the doc accepts the create-handshake and stores the token
+ * hashes, a relay that does simply ignores the payload. The same tokens and
+ * content key are valid on every relay (they only ever guard ciphertext).
+ */
 async function buildToken(docId: Id): Promise<string> {
   const h = getStoredHandle(docId);
   const t = h?.rwToken ?? h?.roToken ?? '';
-  if (h?.pendingCreate && h.rwToken && h.roToken) {
+  if ((h?.pendingCreate || h?.rwConfirmed) && h.rwToken && h.roToken && !h.readonly) {
     return JSON.stringify({
       t,
       create: {
@@ -161,14 +208,20 @@ async function buildToken(docId: Id): Promise<string> {
   return JSON.stringify({ t });
 }
 
-function attachSyncProvider(entry: DocEntry): void {
-  const { docId } = entry;
-  const handle = getStoredHandle(docId);
+/** Connect the doc to every configured relay it is not yet connected to. */
+function attachSyncProviders(entry: DocEntry): void {
+  const handle = getStoredHandle(entry.docId);
   if (!handle || (!handle.rwToken && !handle.roToken)) return;
+  for (const origin of relayOriginsForDoc(entry.docId)) {
+    if (!entry.conns.has(origin)) attachRelayConn(entry, origin);
+  }
+}
 
+function attachRelayConn(entry: DocEntry, origin: string): void {
+  const { docId } = entry;
   try {
-    entry.provider = new HocuspocusProvider({
-      url: getServerConfig().wsUrl,
+    const provider = new HocuspocusProvider({
+      url: relayWsUrl(origin),
       name: docId,
       // With a content key the provider syncs the opaque outer doc; the real
       // doc never leaves the client. Without one (share link that lost its
@@ -177,16 +230,19 @@ function attachSyncProvider(entry: DocEntry): void {
       document: entry.e2ee ? entry.e2ee.outer : entry.doc,
       token: () => buildToken(docId),
       onStatus: ({ status }) => {
+        const conn = entry.conns.get(origin);
+        if (!conn) return;
         // After an auth rejection we stop the socket ourselves; the resulting
         // Disconnected event must not overwrite the sticky 'error' status.
-        if (entry.status === 'error') return;
-        if (status === WebSocketStatus.Connecting) setStatus(entry, 'connecting');
-        else if (status === WebSocketStatus.Disconnected) setStatus(entry, 'offline');
+        if (conn.status === 'error') return;
+        if (status === WebSocketStatus.Connecting) setConnStatus(entry, conn, 'connecting');
+        else if (status === WebSocketStatus.Disconnected) setConnStatus(entry, conn, 'offline');
         // Connected: stay 'connecting' until authenticated + synced.
       },
       onSynced: ({ state }) => {
-        if (state) {
-          setStatus(entry, 'synced');
+        const conn = entry.conns.get(origin);
+        if (state && conn) {
+          setConnStatus(entry, conn, 'synced');
           stampSynced(docId);
           entry.e2ee?.onServerSynced();
           recordPresence(entry);
@@ -194,12 +250,18 @@ function attachSyncProvider(entry: DocEntry): void {
         }
       },
       onAuthenticated: ({ scope }) => {
-        authFallbackTried.delete(docId);
+        const conn = entry.conns.get(origin);
+        if (conn) {
+          conn.scope = scope === 'read-write' ? 'rw' : 'ro';
+          bump(entry);
+        }
         const h = getStoredHandle(docId);
         if (!h) return;
         if (scope === 'read-write') {
-          // Server accepted the create handshake (if any) and confirmed rw.
-          // Only persist when something changes: this fires on every reconnect.
+          authFallbackTried.delete(docId);
+          // This relay accepted the create handshake (if any) and confirmed
+          // rw. Only persist when something changes: this fires on every
+          // reconnect, on every relay.
           if (h.readonly || h.pendingCreate || !h.rwConfirmed || !h.rwToken) {
             updateHandle(docId, {
               // The token we authenticated with is by definition the rw
@@ -211,7 +273,15 @@ function attachSyncProvider(entry: DocEntry): void {
               rwConfirmed: true,
             });
           }
-        } else if (h.rwToken) {
+          return;
+        }
+        // Read-only verdicts only demote the handle when NO relay granted rw
+        // this session: with several relays racing their handshakes, a slower
+        // relay's ro answer must not clobber a confirmed rw grant. (Relays
+        // share the same token hashes by construction, so genuine
+        // disagreement only occurs with a stale or hostile relay.)
+        if (anyRwConn(entry)) return;
+        if (h.rwToken) {
           const untried = h.roToken && h.roToken !== h.rwToken ? h.roToken : undefined;
           if (untried && !h.rwConfirmed) {
             // The primary token turned out read-only, but we hold a second
@@ -245,19 +315,23 @@ function attachSyncProvider(entry: DocEntry): void {
         }
       },
       onAuthenticationFailed: ({ reason }) => {
-        // Local cached data stays fully readable; we just can't sync.
-        console.warn(`[store] sync auth failed for ${docId}: ${reason}`);
+        // Local cached data stays fully readable; we just can't sync there.
+        console.warn(`[store] sync auth failed for ${docId} on ${origin}: ${reason}`);
+        const conn = entry.conns.get(origin);
         const h = getStoredHandle(docId);
         // A rejected primary token that was never server-confirmed may just
         // be the wrong one of two stored candidates: swap and retry once per
         // session instead of parking the doc in 'error'. Nothing is dropped,
-        // so a wrong guess costs one extra handshake at most.
+        // so a wrong guess costs one extra handshake at most. Skipped when
+        // another relay already granted rw (then this relay simply does not
+        // know the doc / the tokens — e.g. not replicated there yet).
         if (
           h?.rwToken &&
           h.roToken &&
           h.roToken !== h.rwToken &&
           !h.rwConfirmed &&
           !h.pendingCreate &&
+          !anyRwConn(entry) &&
           !authFallbackTried.has(docId)
         ) {
           authFallbackTried.add(docId);
@@ -269,25 +343,77 @@ function attachSyncProvider(entry: DocEntry): void {
           setTimeout(() => resyncDoc(docId, { tokenChanged: true }), 0);
           return;
         }
-        setStatus(entry, 'error');
-        // Rejection is deterministic for a given token: stop the provider's
+        if (conn) setConnStatus(entry, conn, 'error');
+        // Rejection is deterministic for a given token: stop this provider's
         // (otherwise unlimited) reconnect loop. resyncDoc() re-enables it.
-        entry.provider?.disconnect();
+        conn?.provider.disconnect();
       },
     });
-    setStatus(entry, 'connecting');
+    const conn: RelayConn = { origin, provider, status: 'connecting' };
+    entry.conns.set(origin, conn);
+    recomputeStatus(entry);
   } catch (err) {
-    console.warn('[store] failed to start sync provider', err);
-    entry.provider = null;
+    console.warn(`[store] failed to start sync provider for ${origin}`, err);
   }
 }
 
-function attachWebrtc(entry: DocEntry): void {
-  // Disabled for v1: public signaling rooms keyed only by docId would let
-  // anyone who learns a docId pull doc contents peer-to-peer, bypassing the
-  // server's token auth. Re-enable only with a room password scheme all
-  // authorized clients can derive (needs a contract change).
-  entry.webrtc = null;
+/* ---------- direct device-to-device sync (WebRTC) ---------- */
+
+function attachP2pFor(entry: DocEntry): void {
+  const key = getStoredHandle(entry.docId)?.key;
+  if (!entry.e2ee || !key) return; // no content key -> no room derivation
+  const gen = ++entry.p2pGen;
+  void attachP2p(entry.docId, entry.e2ee.outer, key, (count) => {
+    if (entry.peerCount !== count) {
+      entry.peerCount = count;
+      bump(entry);
+    }
+  }).then((conn) => {
+    if (!conn) return;
+    // The entry may have been closed or the p2p layer restarted meanwhile.
+    if (entries.get(entry.docId) !== entry || gen !== entry.p2pGen) {
+      conn.destroy();
+      return;
+    }
+    entry.p2p = conn;
+    bump(entry);
+  });
+}
+
+function restartP2p(entry: DocEntry): void {
+  entry.p2pGen++;
+  try {
+    entry.p2p?.destroy();
+  } catch { /* ignore */ }
+  entry.p2p = null;
+  entry.peerCount = 0;
+  attachP2pFor(entry);
+}
+
+// Relay-set changes reshape both the relay connections and the signaling
+// list of the P2P layer; the P2P toggle only the latter.
+subscribeRelays(() => {
+  for (const entry of entries.values()) {
+    reconcileRelayConns(entry);
+    restartP2p(entry);
+  }
+});
+subscribeP2p(() => {
+  for (const entry of entries.values()) restartP2p(entry);
+});
+
+/** Add newly configured relays and drop removed/disabled ones in place. */
+function reconcileRelayConns(entry: DocEntry): void {
+  const targets = new Set(relayOriginsForDoc(entry.docId));
+  for (const [origin, conn] of entry.conns) {
+    if (targets.has(origin)) continue;
+    try {
+      conn.provider.destroy();
+    } catch { /* ignore */ }
+    entry.conns.delete(origin);
+  }
+  attachSyncProviders(entry);
+  recomputeStatus(entry);
 }
 
 /** Open (or return the already-open) doc for an inventory. Never throws. */
@@ -295,8 +421,8 @@ export function openDoc(docId: Id): DocEntry {
   const existing = entries.get(docId);
   if (existing) {
     // Tokens may have arrived after the doc was first opened (e.g. opened via
-    // snapshotInventory, then joined): attach the sync provider late.
-    if (!existing.provider) attachSyncProvider(existing);
+    // snapshotInventory, then joined): attach the sync providers late.
+    if (existing.conns.size === 0) attachSyncProviders(existing);
     return existing;
   }
 
@@ -306,8 +432,10 @@ export function openDoc(docId: Id): DocEntry {
     docId,
     doc,
     idb,
-    provider: null,
-    webrtc: null,
+    conns: new Map(),
+    p2p: null,
+    peerCount: 0,
+    p2pGen: 0,
     e2ee: null,
     keyMissing: false,
     status: 'offline',
@@ -351,11 +479,10 @@ export function openDoc(docId: Id): DocEntry {
       entry.keyMissing = true;
     }
     // Remote updates while connected keep the "last synced" stamp fresh.
-    if (
-      entry.provider &&
-      (origin === entry.provider || origin === E2EE_REMOTE_ORIGIN) &&
-      entry.status === 'synced'
-    ) {
+    const fromRelay =
+      origin === E2EE_REMOTE_ORIGIN ||
+      [...entry.conns.values()].some((c) => origin === c.provider);
+    if (fromRelay && entry.status === 'synced') {
       stampSynced(docId);
     }
     // Re-check the owner directory once the burst settles: the initial sync
@@ -366,8 +493,8 @@ export function openDoc(docId: Id): DocEntry {
     bump(entry);
   });
 
-  attachSyncProvider(entry);
-  attachWebrtc(entry);
+  attachSyncProviders(entry);
+  attachP2pFor(entry);
   return entry;
 }
 
@@ -375,25 +502,42 @@ export function getEntry(docId: Id): DocEntry | null {
   return entries.get(docId) ?? null;
 }
 
+/** Per-relay connection status for a doc, for the UI's per-relay dots. */
+export function getRelayConns(docId: Id): Array<{ origin: string; status: SyncStatus; scope?: 'rw' | 'ro' }> {
+  const entry = entries.get(docId);
+  if (!entry) return [];
+  return [...entry.conns.values()].map((c) => ({
+    origin: c.origin,
+    status: c.status,
+    scope: c.scope,
+  }));
+}
+
 /**
- * (Re)start sync for an open doc: attaches the provider if it never started,
- * and rebuilds it after an auth failure or when a different token was just
- * stored. Rebuilding matters for token upgrades: an already-authenticated
- * readonly connection silently drops writes server-side and only picks up the
- * new token by re-authenticating. (The provider is destroyed and recreated
- * because HocuspocusProvider.connect() no-ops while the socket still reports
- * connected, making an in-place disconnect+connect racy.)
+ * (Re)start sync for an open doc: attaches providers if none started, and
+ * rebuilds them after an auth failure, when a different token was just
+ * stored, or when the doc's relay list changed. Rebuilding matters for token
+ * upgrades: an already-authenticated readonly connection silently drops
+ * writes server-side and only picks up the new token by re-authenticating.
+ * (Providers are destroyed and recreated because HocuspocusProvider.connect()
+ * no-ops while the socket still reports connected, making an in-place
+ * disconnect+connect racy.)
  */
 export function resyncDoc(docId: Id, opts?: { tokenChanged?: boolean }): void {
   const entry = entries.get(docId);
   if (!entry) return;
-  if (entry.provider && !opts?.tokenChanged && entry.status !== 'error') return;
-  try {
-    entry.provider?.destroy();
-  } catch { /* ignore */ }
-  entry.provider = null;
-  setStatus(entry, 'offline'); // clears a sticky 'error' before reconnecting
-  attachSyncProvider(entry);
+  const targets = relayOriginsForDoc(docId);
+  const missing = targets.some((o) => !entry.conns.has(o));
+  const anyError = [...entry.conns.values()].some((c) => c.status === 'error');
+  if (entry.conns.size > 0 && !missing && !opts?.tokenChanged && !anyError) return;
+  for (const conn of entry.conns.values()) {
+    try {
+      conn.provider.destroy();
+    } catch { /* ignore */ }
+  }
+  entry.conns.clear();
+  recomputeStatus(entry); // clears a sticky 'error' before reconnecting
+  attachSyncProviders(entry);
 }
 
 export function subscribeDoc(docId: Id, cb: () => void): () => void {
@@ -414,11 +558,15 @@ export async function closeDoc(docId: Id, opts?: { clearData?: boolean }): Promi
   }
   entries.delete(docId);
   clearTimeout(entry.ownerTimer);
+  entry.p2pGen++; // cancel any in-flight p2p attach
+  for (const conn of entry.conns.values()) {
+    try {
+      conn.provider.destroy();
+    } catch { /* ignore */ }
+  }
+  entry.conns.clear();
   try {
-    entry.provider?.destroy();
-  } catch { /* ignore */ }
-  try {
-    entry.webrtc?.destroy();
+    entry.p2p?.destroy();
   } catch { /* ignore */ }
   if (entry.e2ee) await entry.e2ee.destroy({ clearData: opts?.clearData });
   else if (opts?.clearData) await clearOuterDoc(docId);

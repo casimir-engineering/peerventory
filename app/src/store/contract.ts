@@ -89,6 +89,8 @@ export interface UseInventoryResult {
    */
   owners: Record<Id, OwnerDirectoryEntry>;
   syncStatus: SyncStatus;
+  /** Directly connected WebRTC peers (device-to-device sync), 0 when off. */
+  p2pPeers: number;
 
   updateMeta(patch: Partial<Omit<InventoryMeta, 'id' | 'createdAt'>>): void;
 

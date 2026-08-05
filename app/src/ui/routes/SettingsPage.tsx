@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useInventories, useInventory } from '../../store';
+import { getRelayConns, replicateToMyRelays, useInventories, useInventory } from '../../store';
 import type { UseInventoriesResult, UseInventoryResult } from '../../store/contract';
 import type { Box } from '../../types';
 import { AppHeader } from '../components/AppHeader';
@@ -32,6 +32,9 @@ export function SettingsPage() {
   const currencyOptions = useCurrencyComboOptions(inv.meta?.currency);
 
   const readonly = Boolean(inv.readonly);
+  // Re-read on every render: useInventory's version bumps on per-relay
+  // status changes, so this stays live without its own subscription.
+  const relayConns = docId ? getRelayConns(docId) : [];
   const boxes: Box[] = inv.boxes ?? [];
   const itemsPerBox = new Map<string, number>();
   for (const item of inv.items ?? []) {
@@ -271,13 +274,65 @@ export function SettingsPage() {
           </section>
 
           <section className="card stack tight">
-            <SectionTitle>This device</SectionTitle>
-            <Field label="Sync">
-              <p className="small muted">
-                Items are stored on this device first and sync in the background whenever the server
-                is reachable.
+            <SectionTitle>Sync</SectionTitle>
+            <p className="small muted">
+              Items are stored on this device first and sync in the background through every relay
+              below. Any single reachable relay is enough.
+            </p>
+            {relayConns.length === 0 ? (
+              <p className="small muted">Not connected to any relay yet.</p>
+            ) : (
+              <div className="list-rows">
+                {relayConns.map((conn) => (
+                  <div className="list-row" key={conn.origin} style={{ cursor: 'default' }}>
+                    <span className={`n ${conn.status}`} aria-hidden="true" />
+                    <div className="grow" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                      <span className="small">{conn.origin.replace(/^https?:\/\//, '')}</span>
+                    </div>
+                    <span className="tiny faint">
+                      {conn.status}
+                      {conn.scope ? ` · ${conn.scope === 'rw' ? 'can edit' : 'view only'}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {inv.p2pPeers > 0 ? (
+              <p className="small">
+                <span className="n synced" aria-hidden="true" /> Direct device-to-device:{' '}
+                {inv.p2pPeers} device{inv.p2pPeers === 1 ? '' : 's'} connected
               </p>
-            </Field>
+            ) : null}
+            {!readonly ? (
+              <>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    replicateToMyRelays(docId)
+                      .then(({ relays, photosQueued }) => {
+                        toast(
+                          `Replicating to ${relays.length} relay${relays.length === 1 ? '' : 's'}` +
+                            (photosQueued > 0 ? ` (${photosQueued} photos queued)` : ''),
+                        );
+                      })
+                      .catch((err: unknown) => {
+                        toastError(err instanceof Error ? err.message : 'Replication failed');
+                      });
+                  }}
+                >
+                  Replicate to all my relays
+                </button>
+                <p className="tiny faint">
+                  Pushes this inventory (and its photos) to every relay enabled on this device, so
+                  it stays available if one relay disappears. Manage relays on the Inventories page.
+                </p>
+              </>
+            ) : null}
+          </section>
+
+          <section className="card stack tight">
+            <SectionTitle>This device</SectionTitle>
             <button type="button" className="btn danger" onClick={() => setConfirmForget(true)}>
               Forget this inventory
             </button>

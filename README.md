@@ -2,10 +2,12 @@
 
 Local-first inventory app for customs manifests and shipping personal effects
 across borders. Every device holds the full database and works completely
-offline; devices sync through a small self-hosted relay over WSS on port 443,
-which looks like ordinary HTTPS traffic and works on restrictive networks.
-Sync is end-to-end encrypted: the relay only ever
-stores ciphertext. No third-party services hold your data.
+offline; devices sync through any number of small self-hosted relays over WSS
+on port 443 (looks like ordinary HTTPS traffic, works on restrictive
+networks) and directly with each other over WebRTC on the same network. Sync
+is end-to-end encrypted: relays only ever store ciphertext, are fully
+interchangeable, and any one of them can disappear without data loss. No
+third-party services hold your data.
 
 Runs as an installable web PWA (desktop + mobile) and as an Android APK built
 from the same codebase with Capacitor (with native niceties like system
@@ -96,30 +98,70 @@ Anibis and Facebook Marketplace from that payload — manual-assist only, the
 user always reviews and publishes. See `connector/README.md` for the payload
 contract and workflow.
 
-## Architecture
+## Architecture: relays are interchangeable encrypted mailboxes
 
 ```
 ┌──────────┐  encrypted Yjs log, WSS :443  ┌────────────────────┐
-│  device  │ ◄───────────────────────────► │  self-hosted relay │
-│ (PWA/APK)│   photos: content-addressed   │  Hocuspocus + blob │
-│ IndexedDB│   encrypted blobs (sha-256)   │  store (SQLite)    │
+│  device  │ ◄───────────────────────────► │   relay A (yours)  │
+│ (PWA/APK)│ ◄──────────────────────────┐  │  Hocuspocus + blob │
+│ IndexedDB│                            │  │  store + signaling │
+└────┬─────┘                            │  └────────────────────┘
+     │ WebRTC (direct, LAN/NAT)         └► ┌────────────────────┐
+┌────┴─────┐   signaling via own relays    │ relay B (a friend's│
+│  device  │ ◄───────────────────────────► │ box, a VPS, ...)   │
 └──────────┘                               └────────────────────┘
 ```
 
-- The relay is content-agnostic: it routes and persists an opaque append-log
-  of AES-256-GCM-encrypted CRDT updates plus encrypted photo blobs; access is
-  by per-document token (sha-256 hashes stored server-side). The real
-  inventory document exists only on devices; decryption keys never reach the
-  relay.
-- Devices are the source of truth: full database on every device, offline
-  first, the relay can be rebuilt from any device that holds the documents.
+- **Relays are dumb, content-agnostic and interchangeable.** A relay routes
+  and persists an opaque append-log of AES-256-GCM-encrypted CRDT updates
+  plus encrypted photo blobs; access is by per-document token (sha-256
+  hashes stored server-side). The real inventory document exists only on
+  devices; decryption keys never reach any relay. No relay is special and
+  relays know nothing about each other.
+- **Multi-relay replication.** Every device keeps a relay list; every
+  inventory records which relays it lives on and syncs through ALL of them
+  simultaneously. The same access tokens work on every relay ("replicate to
+  all my relays" registers the doc on new relays through the ordinary
+  creation handshake and pushes the encrypted state + photos). Kill a relay
+  and the doc keeps syncing through the others; a share link's origin is
+  just a hint for one relay it lives on.
+- **Direct device-to-device sync.** Devices holding the same inventory also
+  connect over WebRTC (y-webrtc) and exchange the same encrypted bytes a
+  relay would see — two phones on one Wi-Fi sync even with no relay
+  reachable. Peer discovery ("signaling") runs on your own relays' `/signal`
+  endpoint, never on public servers, and rooms are unguessable HMACs of the
+  document id under its encryption key, plus an encrypted-signaling room
+  password — strangers on a relay cannot discover or join your documents.
+- **Devices are the source of truth**: full database on every device,
+  offline first; any relay can be rebuilt from any device that holds the
+  documents.
+
+## Self-hosting a relay
+
+Any box that can run Docker can be a relay for your inventories (and only
+stores ciphertext for whatever gets pushed to it):
+
+```bash
+git clone <this repo> && cd inventory-app
+# Build the PWA the relay serves (set the origin the relay will live at)
+cd app && npm install && VITE_SERVER_ORIGIN=https://inv.example.com npm run build && cd ..
+# Standalone with automatic TLS (Caddy):
+cd deploy && echo 'INVENTORY_HOST=inv.example.com' > .env && docker compose up -d --build
+# ...or behind an existing reverse proxy: see deploy/npm-proxy/README.md
+```
+
+Then, in the app, open **You & this device → Sync relays → Add** and enter
+`inv.example.com`; new inventories will use it automatically, and "Replicate
+to all my relays" in an inventory's settings pushes existing ones there.
 
 ## Layout
 
 - `app/` — Vite + React + TypeScript PWA; Yjs CRDT store (`y-indexeddb` local
-  persistence, Hocuspocus sync client); Capacitor Android packaging
-- `server/` — single Node service: Hocuspocus sync (`/sync`) +
-  content-addressed photo blob API (`/api/blobs`)
+  persistence, one Hocuspocus sync client per relay, y-webrtc direct sync);
+  Capacitor Android packaging
+- `server/` — single Node service (one instance = one relay): Hocuspocus
+  sync (`/sync`) + content-addressed photo blob API (`/api/blobs`) + WebRTC
+  signaling (`/signal`)
 - `connector/` — Chrome extension (MV3) that autofills marketplace listing
   forms from the app's Sell payload, plus its tests
 - `deploy/` — Docker Compose deployments: standalone with Caddy TLS
@@ -162,9 +204,17 @@ single `docker compose up -d` once DNS points at the box.
 - Share links and backups carry bearer tokens **and the decryption key**:
   whoever has the link/QR has the access it grants. Treat backups like
   passwords.
-- All inventories are end-to-end encrypted; the relay operator only ever
+- All inventories are end-to-end encrypted; a relay operator only ever
   sees ciphertext, blob sizes, and coarse metadata (doc ids, update timing,
   random per-device write ids). The key rides in the URL fragment, which the
-  browser never sends to any server.
+  browser never sends to any server. The same tokens work on every relay a
+  document is replicated to — only push documents to relays run by people
+  you would hand the (encrypted) mailbox to.
+- Direct device-to-device sync never uses public signaling servers: peers
+  meet through your own relays, in rooms derived from the document's
+  encryption key (unguessable without it), with signaling payloads
+  additionally encrypted by a key-derived room password. A signaling relay
+  learns only opaque room ids, IP addresses and timing. WebRTC's STUN step
+  uses standard public STUN servers (they see IPs, never data).
 - The optional Anthropic key is stored only in the device's localStorage and
   is sent only to the Anthropic API, never to the relay.

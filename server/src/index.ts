@@ -8,6 +8,7 @@ import { Server } from "@hocuspocus/server";
 import type { AiRuntimeOptions } from "./ai.js";
 import { applyAccessToConnection, type AccessLevel } from "./auth.js";
 import { createHttpApp } from "./http.js";
+import { SignalingService } from "./signaling.js";
 import { MetadataStore } from "./storage.js";
 
 const SERVER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,6 +26,7 @@ export interface InventoryServerOptions {
 export interface RunningInventoryServer {
   port: number;
   metadata: MetadataStore;
+  signaling: SignalingService;
   close(): Promise<void>;
 }
 
@@ -61,6 +63,7 @@ export async function startInventoryServer(
   mkdirSync(blobDir, { recursive: true });
 
   const metadata = new MetadataStore(databasePath);
+  const signaling = new SignalingService();
   const sqlite = new SQLite({ database: databasePath });
   const app = createHttpApp({
     ai: { ...options.ai, logger: options.ai?.logger ?? logger },
@@ -76,8 +79,14 @@ export async function startInventoryServer(
     quiet: options.quiet ?? false,
     stopOnSignals: false,
     extensions: [sqlite],
-    onUpgrade: async ({ request, socket }) => {
+    onUpgrade: async ({ request, socket, head }) => {
       const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+      if (pathname === "/signal") {
+        // y-webrtc signaling rides on the same port; throwing (falsy) stops
+        // Hocuspocus from also handling this upgrade.
+        signaling.handleUpgrade(request, socket, head as Buffer);
+        throw null;
+      }
       if (pathname !== "/sync") {
         socket.destroy();
         throw null;
@@ -113,6 +122,7 @@ export async function startInventoryServer(
     closePromise ??= (async () => {
       process.off("SIGINT", signalHandler);
       process.off("SIGTERM", signalHandler);
+      signaling.close();
       await server.destroy();
       sqlite.db?.close();
       metadata.close();
@@ -136,6 +146,7 @@ export async function startInventoryServer(
   return {
     port: server.address.port,
     metadata,
+    signaling,
     close,
   };
 }

@@ -40,8 +40,19 @@ import {
 import { generateContentKey, isValidContentKey } from './crypto';
 import { newId, newToken } from './ids';
 import { readOwners, resolveOwnerIdForName, upsertOwner } from './owners';
-import { addPhoto as storeAddPhoto, clearUploadQueue, kickUploadLoop } from './photos';
+import {
+  addPhoto as storeAddPhoto,
+  clearUploadQueue,
+  enqueueDocPhotos,
+  kickUploadLoop,
+} from './photos';
 import { profileRecordInventory, profileRecordRemoval } from './profileSync';
+import {
+  defaultRelayOrigin,
+  enabledRelayOrigins,
+  mergeRelayLists,
+  takeRelayHint,
+} from './relays';
 import {
   getHandlesSnapshot,
   getRegistryVersion,
@@ -75,8 +86,18 @@ async function createInventory(
   const key = generateContentKey();
 
   // Handle must exist before openDoc so the sync provider can build its token
-  // (including the first-connect create payload, see CONTRACTS.md).
-  upsertHandle({ docId, rwToken, roToken, key, name, readonly: false, pendingCreate: true });
+  // (including the first-connect create payload, see CONTRACTS.md). A new doc
+  // starts on every relay this device has enabled.
+  upsertHandle({
+    docId,
+    rwToken,
+    roToken,
+    key,
+    name,
+    readonly: false,
+    pendingCreate: true,
+    relays: mergeRelayLists([defaultRelayOrigin()], enabledRelayOrigins()),
+  });
 
   const entry = openDoc(docId);
   const now = Date.now();
@@ -106,8 +127,15 @@ async function joinInventory(docId: Id, token: string, key?: string): Promise<In
 
 async function joinInventoryImpl(docId: Id, token: string, key?: string): Promise<InventoryHandle> {
   const contentKey = key && isValidContentKey(key) ? key : undefined;
+  // The origin the share link pointed at is a relay hint for this doc; a link
+  // parsed without an explicit origin falls back to the device default.
+  const relayHint = takeRelayHint(docId) ?? defaultRelayOrigin();
   const existing = getStoredHandle(docId);
   if (existing) {
+    const relays = mergeRelayLists(existing.relays, [relayHint]);
+    if (relays.length !== (existing.relays ?? []).length) {
+      updateHandle(docId, { relays });
+    }
     // A new token may upgrade us; store it as rw until the server says
     // otherwise — but never clobber a server-confirmed rw token with a token
     // of unknown kind (an owner opening their own ro share link would
@@ -150,9 +178,42 @@ async function joinInventoryImpl(docId: Id, token: string, key?: string): Promis
   }
   // Token kind unknown until the server handshake; docs.ts moves it to roToken
   // and flips `readonly` if the server grants read-only scope.
-  upsertHandle({ docId, rwToken: token, key: contentKey, readonly: false });
+  upsertHandle({
+    docId,
+    rwToken: token,
+    key: contentKey,
+    readonly: false,
+    relays: [relayHint],
+  });
   openDoc(docId);
   return getStoredHandle(docId)!;
+}
+
+/**
+ * Push an inventory to every relay enabled on this device: the handle's relay
+ * list becomes the union, the doc (re)connects everywhere — new relays learn
+ * the doc through the create-handshake (requires a server-confirmed rw token
+ * plus the ro token, see CONTRACTS.md "Multi-relay replication") — and all
+ * photos are queued for upload to relays that miss them.
+ */
+export async function replicateToMyRelays(
+  docId: Id,
+): Promise<{ relays: string[]; photosQueued: number }> {
+  const h = getStoredHandle(docId);
+  if (!h) throw new Error('replicateToMyRelays: unknown inventory');
+  const relays = mergeRelayLists(
+    h.relays ?? [defaultRelayOrigin()],
+    enabledRelayOrigins(),
+  );
+  updateHandle(docId, { relays });
+  openDoc(docId);
+  resyncDoc(docId, { tokenChanged: true });
+  let photosQueued = 0;
+  if (h.rwToken && !h.readonly) {
+    photosQueued = await enqueueDocPhotos(docId);
+    kickUploadLoop(docId);
+  }
+  return { relays, photosQueued };
 }
 
 /**
@@ -286,6 +347,7 @@ export function useInventory(docId: Id | null): UseInventoryResult {
     savedLists: data.savedLists,
     owners: data.owners,
     syncStatus: entry?.status ?? 'offline',
+    p2pPeers: entry?.peerCount ?? 0,
 
     updateMeta(patch) {
       const e = guardWrite(entry, docId);

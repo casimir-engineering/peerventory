@@ -1,5 +1,6 @@
 {$INVENTORY_HOST} {
 	reverse_proxy /sync* server:8787
+	reverse_proxy /signal* server:8787
 	reverse_proxy /api/* server:8787
 
 	root * /srv

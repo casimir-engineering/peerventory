@@ -88,13 +88,26 @@ export function updateHandle(docId: Id, patch: Partial<StoredHandle>): void {
   persistAndNotify(next);
 }
 
+/** Union of two relay lists; returns undefined when both are empty/absent. */
+function unionRelays(a?: string[], b?: string[]): string[] | undefined {
+  const merged = [...new Set([...(a ?? []), ...(b ?? [])])];
+  return merged.length > 0 ? merged : undefined;
+}
+
+function sameRelays(a?: string[], b?: string[]): boolean {
+  return (a ?? []).join(' ') === (b ?? []).join(' ');
+}
+
 /**
- * Merge handles from a device backup. Never downgrades: a server-confirmed
- * read-write token is kept over an incoming one, and read-only imports never
- * clobber existing write access. Returns what happened for the toast.
+ * Merge handles from a device backup or the synced profile doc. Never
+ * downgrades: a server-confirmed read-write token is kept over an incoming
+ * one, and read-only imports never clobber existing write access. Relay
+ * lists union-merge (add-only). Returns what happened for the toast.
  */
 export function importHandles(
-  incoming: Array<Pick<InventoryHandle, 'docId' | 'rwToken' | 'roToken' | 'key' | 'name'>>,
+  incoming: Array<
+    Pick<InventoryHandle, 'docId' | 'rwToken' | 'roToken' | 'key' | 'name' | 'relays'>
+  >,
 ): { added: number; upgraded: number; unchanged: number } {
   let added = 0;
   let upgraded = 0;
@@ -112,12 +125,14 @@ export function importHandles(
         roToken: inc.roToken,
         key: inc.key,
         name: inc.name,
+        relays: unionRelays(inc.relays),
         readonly: !inc.rwToken,
       });
       added++;
       continue;
     }
     const existing = next[idx];
+    const relays = unionRelays(existing.relays, inc.relays);
     const canUpgrade =
       inc.rwToken &&
       inc.rwToken !== existing.rwToken &&
@@ -129,6 +144,7 @@ export function importHandles(
         roToken: existing.roToken ?? inc.roToken,
         key: existing.key ?? inc.key,
         name: existing.name ?? inc.name,
+        relays,
         readonly: false,
         rwConfirmed: undefined,
       };
@@ -139,13 +155,15 @@ export function importHandles(
       if (
         (!existing.roToken && inc.roToken) ||
         (!existing.name && inc.name) ||
-        (!existing.key && inc.key)
+        (!existing.key && inc.key) ||
+        !sameRelays(existing.relays, relays)
       ) {
         next[idx] = {
           ...existing,
           roToken: existing.roToken ?? inc.roToken,
           key: existing.key ?? inc.key,
           name: existing.name ?? inc.name,
+          relays,
         };
         filled = true;
       }

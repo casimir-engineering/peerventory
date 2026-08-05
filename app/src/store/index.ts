@@ -6,12 +6,27 @@ export {
   getHandle,
   importSnapshot,
   reopenEncryptedDoc,
+  replicateToMyRelays,
 } from './hooks';
 export { usePhotoUrl, getPhotoBlob } from './photos';
 export { newId, newToken } from './ids';
 export { getDeviceId } from './device';
 export { ownerDisplayName } from './owners';
 export { getHandlesSnapshot, getStoredHandle, importHandles } from './registry';
+export { getRelayConns } from './docs';
+export {
+  addRelay,
+  defaultRelayOrigin,
+  getRelaysSnapshot,
+  normalizeRelayUrl,
+  relayHttpUrl,
+  rememberRelayHint,
+  removeRelay,
+  setRelayEnabled,
+  subscribeRelays,
+  type RelayEntry,
+} from './relays';
+export { isP2pEnabled, setP2pEnabled, subscribeP2p } from './p2p';
 export {
   startProfileSync,
   subscribeProfileStatus,

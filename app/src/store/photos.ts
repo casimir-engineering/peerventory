@@ -6,12 +6,12 @@
 import { get as idbGet, set as idbSet, del as idbDel, update as idbUpdate } from 'idb-keyval';
 import { useEffect, useState } from 'react';
 import * as Y from 'yjs';
-import { getServerConfig } from '../config';
 import type { Id, PhotoRef, PhotoRole } from '../types';
 import { decryptPhoto, encryptPhoto, importContentKey, type DocKey } from './crypto';
 import { openDoc } from './docs';
 import { sha256Hex } from './ids';
 import { getHandlesSnapshot, getStoredHandle } from './registry';
+import { relayHttpUrl, relayOriginsForDoc } from './relays';
 
 /** Imported CryptoKeys per content key string (import is async, keys are stable). */
 const keyCache = new Map<string, Promise<DocKey>>();
@@ -39,6 +39,8 @@ const queueKey = (docId: Id) => 'uploadq:' + docId;
 interface QueueEntry {
   hash: string;
   mime: string;
+  /** Relay origins this blob has already been uploaded to. */
+  up?: string[];
 }
 
 /* ---------- image normalization ---------- */
@@ -130,24 +132,28 @@ export async function getPhotoBlob(docId: Id, hash: string): Promise<Blob | null
   const token = handle?.rwToken ?? handle?.roToken;
   const keyPromise = docKeyFor(docId);
   if (!token || !keyPromise) return null;
-  try {
-    const res = await fetch(`${getServerConfig().httpUrl}/blobs/${docId}/${hash}`, {
-      headers: { 'x-token': token },
-    });
-    if (!res.ok) return null;
-    // The server returned ciphertext; decrypt before caching.
-    const wire = new Uint8Array(await res.arrayBuffer());
-    const plain = await decryptPhoto(await keyPromise, wire);
-    if (!plain) {
-      console.warn(`[store] photo ${hash} of ${docId} failed to decrypt`);
-      return null;
+  // Any relay holding the doc can serve the blob: try them in order.
+  for (const origin of relayOriginsForDoc(docId)) {
+    try {
+      const res = await fetch(`${relayHttpUrl(origin)}/blobs/${docId}/${hash}`, {
+        headers: { 'x-token': token },
+      });
+      if (!res.ok) continue;
+      // The server returned ciphertext; decrypt before caching.
+      const wire = new Uint8Array(await res.arrayBuffer());
+      const plain = await decryptPhoto(await keyPromise, wire);
+      if (!plain) {
+        console.warn(`[store] photo ${hash} of ${docId} failed to decrypt`);
+        continue;
+      }
+      const blob = new Blob([plain.bytes.slice().buffer as ArrayBuffer], { type: plain.mime });
+      await idbSet(blobKey(hash), blob);
+      return blob;
+    } catch {
+      // relay unreachable; try the next one
     }
-    const blob = new Blob([plain.bytes.slice().buffer as ArrayBuffer], { type: plain.mime });
-    await idbSet(blobKey(hash), blob);
-    return blob;
-  } catch {
-    return null;
   }
+  return null;
 }
 
 /* ---------- upload queue ---------- */
@@ -197,14 +203,33 @@ async function runUploadLoop(docId: Id): Promise<void> {
     const token = getStoredHandle(docId)?.rwToken;
     if (!token) return; // no write access (yet); re-kicked when things change
 
+    // A blob must reach EVERY relay the doc syncs through; per-origin
+    // successes are persisted on the entry so a retry only hits the
+    // relays still missing the blob.
     const entry = q[0];
-    let done = false;
-    try {
-      done = await uploadOne(docId, token, entry);
-    } catch {
-      done = false; // network error -> backoff below
+    const targets = relayOriginsForDoc(docId);
+    const uploaded = new Set(entry.up ?? []);
+    let progressed = false;
+    let dropped = false;
+    for (const origin of targets) {
+      if (uploaded.has(origin)) continue;
+      let outcome: UploadOutcome;
+      try {
+        outcome = await uploadOne(docId, token, entry, origin);
+      } catch {
+        outcome = 'retry'; // network error -> backoff below
+      }
+      if (outcome === 'done') {
+        uploaded.add(origin);
+        progressed = true;
+      } else if (outcome === 'drop') {
+        dropped = true;
+        break;
+      }
     }
-    if (done) {
+
+    const complete = dropped || targets.every((o) => uploaded.has(o));
+    if (complete) {
       // Atomic remove (see enqueueUpload): a plain get/filter/set here could
       // drop an entry enqueued between the read and the write.
       await idbUpdate<QueueEntry[]>(queueKey(docId), (latest = []) =>
@@ -212,29 +237,42 @@ async function runUploadLoop(docId: Id): Promise<void> {
       );
       backoff = 2000;
     } else {
+      if (progressed) {
+        await idbUpdate<QueueEntry[]>(queueKey(docId), (latest = []) =>
+          latest.map((e) => (e.hash === entry.hash ? { ...e, up: [...uploaded] } : e)),
+        );
+      }
       await sleep(backoff);
       backoff = Math.min(backoff * 2, 60_000);
     }
   }
 }
 
-/** Returns true when the entry can be removed from the queue. Throws on network errors. */
-async function uploadOne(docId: Id, token: string, entry: QueueEntry): Promise<boolean> {
+/** 'done' = uploaded/already there; 'drop' = never retry; 'retry' = try again later. */
+type UploadOutcome = 'done' | 'drop' | 'retry';
+
+/** Upload one blob to one relay. Throws on network errors. */
+async function uploadOne(
+  docId: Id,
+  token: string,
+  entry: QueueEntry,
+  origin: string,
+): Promise<UploadOutcome> {
   const blob = await idbGet<Blob>(blobKey(entry.hash));
   if (!blob) {
     console.warn(`[store] upload: missing local blob ${entry.hash}, dropping`);
-    return true;
+    return 'drop';
   }
-  const url = `${getServerConfig().httpUrl}/blobs/${docId}/${entry.hash}`;
+  const url = `${relayHttpUrl(origin)}/blobs/${docId}/${entry.hash}`;
 
   const keyPromise = docKeyFor(docId);
   if (!keyPromise) {
     console.warn(`[store] upload: no content key for ${docId}, dropping ${entry.hash}`);
-    return true;
+    return 'drop';
   }
 
   const head = await fetch(url, { method: 'HEAD', headers: { 'x-token': token } });
-  if (head.ok) return true; // already on the server (dedupe)
+  if (head.ok) return 'done'; // already on this relay (dedupe)
 
   // Upload ciphertext only. Local blobs stay plaintext; deterministic
   // encryption reproduces exactly the bytes the entry hash addresses.
@@ -243,7 +281,7 @@ async function uploadOne(docId: Id, token: string, entry: QueueEntry): Promise<b
   const wireHash = await sha256Hex(wire.slice().buffer as ArrayBuffer);
   if (wireHash !== entry.hash) {
     console.warn(`[store] upload: ciphertext hash mismatch for ${entry.hash}, dropping`);
-    return true;
+    return 'drop';
   }
 
   const put = await fetch(url, {
@@ -251,12 +289,36 @@ async function uploadOne(docId: Id, token: string, entry: QueueEntry): Promise<b
     headers: { 'x-token': token, 'content-type': 'application/octet-stream' },
     body: wire as BodyInit,
   });
-  if (put.ok) return true;
+  if (put.ok) return 'done';
   if (put.status === 413 || put.status === 400) {
-    console.warn(`[store] upload: server rejected blob ${entry.hash} (${put.status}), dropping`);
-    return true;
+    console.warn(`[store] upload: relay rejected blob ${entry.hash} (${put.status}), dropping`);
+    return 'drop';
   }
-  return false; // auth/5xx -> retry with backoff
+  return 'retry'; // auth/5xx -> retry with backoff
+}
+
+/**
+ * Queue every photo referenced by the doc for (re-)upload, fetching blobs
+ * from any reachable relay first when they are not cached locally. Used by
+ * "replicate to all my relays" so new relays receive the photos too.
+ */
+export async function enqueueDocPhotos(docId: Id): Promise<number> {
+  const entry = openDoc(docId);
+  await entry.idb.whenSynced;
+  const refs: PhotoRef[] = [];
+  entry.doc.getMap<Y.Map<unknown>>('items').forEach((item) => {
+    const photos = item.get('photos');
+    if (Array.isArray(photos)) refs.push(...(photos as PhotoRef[]));
+  });
+  let queued = 0;
+  for (const ref of refs) {
+    // Ensure the plaintext blob exists locally (downloads from any relay).
+    const blob = await getPhotoBlob(docId, ref.hash);
+    if (!blob) continue;
+    await enqueueUpload(docId, ref.hash, ref.mime);
+    queued++;
+  }
+  return queued;
 }
 
 function kickAllLoops(): void {

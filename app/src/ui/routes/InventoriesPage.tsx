@@ -6,6 +6,7 @@ import * as services from '../../services';
 import {
   getDeviceId,
   getProfileStatus,
+  rememberRelayHint,
   snapshotInventory,
   subscribeProfileStatus,
   useInventories,
@@ -22,6 +23,7 @@ import { ImportModal } from '../components/ImportModal';
 import { Modal } from '../components/Modal';
 import { QrCanvas } from '../components/QrCanvas';
 import { QrScanner } from '../components/QrScanner';
+import { RelaysSection } from '../components/RelaysSection';
 import { useToast } from '../components/Toast';
 import { buildBackupUrl, joinRoute, parseShareLink } from '../lib/links';
 import type { ParsedImport } from '../lib/importFile';
@@ -260,6 +262,8 @@ export function InventoriesPage() {
       }
       const parsed = parseShareLink(text);
       if (!parsed) return false;
+      // A pasted/scanned link's origin is a relay hint the join flow records.
+      if (parsed.origin) rememberRelayHint(parsed.docId, parsed.origin);
       setJoining(false);
       navigate(joinRoute(parsed));
       return true;
@@ -410,6 +414,8 @@ export function InventoriesPage() {
                     Backup
                   </button>
                 </div>
+
+                <RelaysSection />
               </div>
             ) : null}
 
