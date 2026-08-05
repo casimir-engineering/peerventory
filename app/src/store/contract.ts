@@ -103,6 +103,8 @@ export interface UseInventoryResult {
   createItem(draft: ItemDraft): Id;
   updateItem(itemId: Id, patch: ItemPatch): void;
   deleteItem(itemId: Id): void;
+  /** Delete several items as one update, so peers see the removal at once. */
+  deleteItems(itemIds: Id[]): void;
 
   /** Append to location history (current location = last entry). */
   addLocation(itemId: Id, entry: LocationEntry): void;

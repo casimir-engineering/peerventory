@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as services from '../../services';
 import { useInventory } from '../../store';
@@ -8,10 +8,11 @@ import { AppHeader } from '../components/AppHeader';
 import { EmptyState, LoadingPage, SyncingState } from '../components/Common';
 import { ExportButtons } from '../components/ExportButtons';
 import { Field } from '../components/Fields';
-import { Modal } from '../components/Modal';
+import { hasOpenModal, Modal } from '../components/Modal';
 import { PhotoImage } from '../components/Photos';
 import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
+import { TwoStepDeleteButton } from '../components/TwoStepDelete';
 import {
   convertedMoneyHint,
   formatMoney,
@@ -21,6 +22,7 @@ import {
 } from '../lib/format';
 import { buildShareUrl, selectionNeedsSavedList } from '../lib/links';
 import type { LinkTarget } from '../lib/links';
+import { registerNavigationGuard } from '../lib/navGuard';
 
 const NO_BOX = '__none__';
 
@@ -111,9 +113,52 @@ export function InventoryHomePage() {
   const toggle = (id: Id) =>
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
-  const leaveSelectMode = () => {
+  const leaveSelectMode = useCallback(() => {
     setSelectMode(false);
     setSelected([]);
+  }, []);
+
+  /** Long-press on a card is the touch way in; it picks that card straight away. */
+  const enterSelectModeWith = (id: Id) => {
+    setSelectMode(true);
+    setSelected((prev) => (prev.includes(id) ? prev : [...prev, id]));
+  };
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((item) => selected.includes(item.id));
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) setSelected([]);
+    else setSelected((prev) => [...new Set([...prev, ...filtered.map((item) => item.id)])]);
+  };
+
+  // The system back button leaves the selection instead of leaving the page —
+  // the same escape hatch the Cancel button gives, on the gesture Android
+  // users reach for first.
+  useEffect(() => {
+    if (!selectMode) return;
+    return registerNavigationGuard(() => {
+      leaveSelectMode();
+      return true;
+    });
+  }, [selectMode, leaveSelectMode]);
+
+  // Escape is the desktop equivalent, unless a dialog is using it first.
+  useEffect(() => {
+    if (!selectMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !hasOpenModal()) leaveSelectMode();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectMode, leaveSelectMode]);
+
+  const deleteSelection = () => {
+    const count = selected.length;
+    if (count === 0 || inv.readonly) return;
+    inv.deleteItems(selected);
+    leaveSelectMode();
+    toast(`${count} item${count === 1 ? '' : 's'} deleted`);
   };
 
   const shareSelection = () => {
@@ -269,20 +314,28 @@ export function InventoryHomePage() {
             </div>
           )}
 
-          <div className="row between">
-            <span className="small muted">
-              {filtered.length === items.length ? allCount : filteredCount}
-            </span>
-            {items.length > 0 ? (
-              <button
-                type="button"
-                className="link-btn"
-                onClick={() => (selectMode ? leaveSelectMode() : setSelectMode(true))}
-              >
-                {selectMode ? 'Cancel selection' : 'Select items'}
+          {selectMode ? (
+            <div className="select-bar">
+              <span className="count">{selected.length} selected</span>
+              <button type="button" className="link-btn" onClick={toggleSelectAll}>
+                {allFilteredSelected ? 'Select none' : 'Select all'}
               </button>
-            ) : null}
-          </div>
+              <button type="button" className="link-btn" onClick={leaveSelectMode}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="row between">
+              <span className="small muted">
+                {filtered.length === items.length ? allCount : filteredCount}
+              </span>
+              {items.length > 0 ? (
+                <button type="button" className="link-btn" onClick={() => setSelectMode(true)}>
+                  Select items
+                </button>
+              ) : null}
+            </div>
+          )}
 
           {savedLists.length > 0 && !selectMode ? (
             <details className="disclosure">
@@ -349,6 +402,7 @@ export function InventoryHomePage() {
                   onClick={() =>
                     selectMode ? toggle(item.id) : navigate(`/inv/${docId}/i/${item.id}`)
                   }
+                  onLongPress={() => enterSelectModeWith(item.id)}
                 />
               ))}
             </div>
@@ -368,9 +422,6 @@ export function InventoryHomePage() {
       {selectMode ? (
         <div className="bottom-bar">
           <div className="inner">
-            <span className="small muted" style={{ minWidth: 64 }}>
-              {selected.length} selected
-            </span>
             <button
               type="button"
               className="btn primary"
@@ -395,6 +446,20 @@ export function InventoryHomePage() {
             >
               Export
             </button>
+            {inv.readonly ? null : (
+              <TwoStepDeleteButton
+                onDelete={deleteSelection}
+                label={`Delete ${selected.length} selected item${
+                  selected.length === 1 ? '' : 's'
+                }`}
+                armedLabel="Tap again to delete the selected items"
+                disabled={selected.length === 0}
+                resetKey={selected.join(',')}
+                armedChildren="Confirm"
+              >
+                Delete{selected.length > 0 ? ` (${selected.length})` : ''}
+              </TwoStepDeleteButton>
+            )}
           </div>
         </div>
       ) : null}
@@ -477,6 +542,8 @@ export function InventoryHomePage() {
   );
 }
 
+const LONG_PRESS_MS = 450;
+
 function ItemCard({
   docId,
   item,
@@ -485,6 +552,7 @@ function ItemCard({
   selectMode,
   selected,
   onClick,
+  onLongPress,
 }: {
   docId: Id;
   item: Item;
@@ -493,13 +561,66 @@ function ItemCard({
   selectMode: boolean;
   selected: boolean;
   onClick: () => void;
+  /** Press-and-hold: the touch way into selection mode. */
+  onLongPress: () => void;
 }) {
   const cover = item.photos?.[0]?.hash ?? null;
   const conversionHint = convertedMoneyHint(item.valueCurrent, mainCurrency);
+  const timer = useRef<number | null>(null);
+  const origin = useRef({ x: 0, y: 0 });
+  // A long press ends in a click too; that click would undo the selection the
+  // press just made, so it is swallowed once.
+  const fired = useRef(false);
+
+  const cancelPress = () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  };
+
+  useEffect(() => cancelPress, []);
+
+  const startPress = (x: number, y: number) => {
+    cancelPress();
+    fired.current = false;
+    origin.current = { x, y };
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      fired.current = true;
+      onLongPress();
+    }, LONG_PRESS_MS);
+  };
+
+  // A finger never holds perfectly still; only a real drag (or a scroll)
+  // should call the hold off.
+  const pressMoved = (x: number, y: number) => {
+    if (timer.current === null) return;
+    if (Math.hypot(x - origin.current.x, y - origin.current.y) > 12) cancelPress();
+  };
+
   return (
     <div
       className={selected ? 'item-card selected' : 'item-card'}
-      onClick={onClick}
+      onClick={() => {
+        if (fired.current) {
+          fired.current = false;
+          return;
+        }
+        onClick();
+      }}
+      onPointerDown={(e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        startPress(e.clientX, e.clientY);
+      }}
+      onPointerUp={cancelPress}
+      onPointerLeave={cancelPress}
+      onPointerCancel={cancelPress}
+      onPointerMove={(e) => pressMoved(e.clientX, e.clientY)}
+      onContextMenu={(e) => {
+        // Android fires this at the end of a hold; the selection is the menu.
+        if (fired.current) e.preventDefault();
+      }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {

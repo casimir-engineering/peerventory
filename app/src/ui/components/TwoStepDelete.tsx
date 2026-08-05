@@ -58,6 +58,7 @@ export function TwoStepDeleteButton({
   disabled,
   children,
   armedChildren,
+  resetKey,
 }: {
   onDelete: () => void;
   /** What the button does, for the tooltip and the screen reader. */
@@ -68,9 +69,19 @@ export function TwoStepDeleteButton({
   children: ReactNode;
   /** Label text while armed; icon buttons keep their glyph and omit this. */
   armedChildren?: ReactNode;
+  /**
+   * Disarms whenever this value changes. Buttons that act on a moving target
+   * — a multi-selection, say — pass it so the second tap can never delete a
+   * set the first tap did not describe.
+   */
+  resetKey?: unknown;
 }) {
   const { armed, trigger, disarm } = useTwoStepAction(onDelete);
   const text = armed ? armedLabel : label;
+
+  useEffect(() => {
+    disarm();
+  }, [resetKey, disarm]);
 
   return (
     <button

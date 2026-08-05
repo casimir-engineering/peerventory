@@ -466,6 +466,15 @@ export function useInventory(docId: Id | null): UseInventoryResult {
       e.doc.getMap<Y.Map<unknown>>('items').delete(itemId);
     },
 
+    deleteItems(itemIds: Id[]) {
+      const e = guardWrite(entry, docId);
+      if (!e || itemIds.length === 0) return;
+      e.doc.transact(() => {
+        const items = e.doc.getMap<Y.Map<unknown>>('items');
+        for (const id of itemIds) items.delete(id);
+      });
+    },
+
     addLocation(itemId: Id, locationEntry: LocationEntry) {
       const e = guardWrite(entry, docId);
       if (!e) return;

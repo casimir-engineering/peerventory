@@ -651,6 +651,27 @@ hr {
   gap: 8px;
 }
 
+/*
+ * Selection mode replaces the item count with its own bar: how many are
+ * picked, and the two ways out of the mode.
+ */
+.select-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.select-bar .count {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
 .item-card {
   display: flex;
   gap: 12px;
@@ -661,6 +682,10 @@ hr {
   border-radius: var(--radius);
   cursor: pointer;
   transition: border-color 0.12s ease, background 0.12s ease;
+  /* Press-and-hold selects the card; it must not select its text instead. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .item-card:hover {
@@ -1146,6 +1171,18 @@ table.data th.num {
   padding: 0 10px;
   font-size: 0.875rem;
   white-space: nowrap;
+}
+
+/* The selection bar carries four actions; on a phone they have to give way. */
+@media (max-width: 430px) {
+  .bottom-bar .inner {
+    gap: 6px;
+  }
+
+  .bottom-bar .inner > .btn {
+    padding: 0 6px;
+    font-size: 0.8125rem;
+  }
 }
 
 /* ---------------------------------------------------------------- modal */

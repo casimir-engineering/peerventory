@@ -121,6 +121,14 @@ re-encrypted under the target inventory's key and queued for upload, so the
 move works offline. If a photo was never downloaded to this device, the app
 says so and asks before leaving it behind.
 
+**Selecting several items at once.** Press and hold an item card (or tap
+**Select items**) to enter selection mode: tapping cards ticks them, the bar
+counts them and offers Select all, and the actions at the bottom share,
+export, save the picks as a list, or delete them. Deleting asks for a second
+tap — **Delete (n)** turns red and reads **Confirm** for a couple of seconds
+— and then removes the whole selection in one synced change. Back (or
+Escape) leaves selection mode rather than the screen.
+
 **Statistics.** Total value, weight, and volume per inventory, broken down by
 carton and category — matching what goes on the customs manifest. An item
 sheet describes one object, so every total multiplies its per-unit value,
