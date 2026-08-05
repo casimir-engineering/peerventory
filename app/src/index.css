@@ -1374,6 +1374,10 @@ table.data th.num {
   background: var(--surface-2);
 }
 
+.list-row[aria-pressed='true'] {
+  background: var(--accent-soft);
+}
+
 .filters {
   display: flex;
   gap: 8px;

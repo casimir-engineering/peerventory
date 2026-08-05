@@ -5,10 +5,12 @@ export {
   snapshotInventory,
   getHandle,
   importSnapshot,
+  moveItemToInventory,
   restoreSnapshotInto,
   reopenEncryptedDoc,
   replicateToMyRelays,
 } from './hooks';
+export type { MoveItemResult } from './hooks';
 export { usePhotoUrl, getPhotoBlob } from './photos';
 export { newId, newToken } from './ids';
 export { getDeviceId } from './device';

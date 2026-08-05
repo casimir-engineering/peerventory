@@ -45,6 +45,7 @@ import {
   clearAllPhotoData,
   clearUploadQueue,
   enqueueDocPhotos,
+  getPhotoBlob,
   kickUploadLoop,
 } from './photos';
 import {
@@ -623,6 +624,146 @@ export async function snapshotInventory(docId: Id): Promise<InventorySnapshot> {
 
 export function getHandle(docId: Id): InventoryHandle | null {
   return getStoredHandle(docId);
+}
+
+/* ---------------- moving an item between inventories ---------------- */
+
+export type MoveItemResult =
+  | {
+      status: 'moved';
+      /** Id in the target doc: the original one unless it was already taken. */
+      itemId: Id;
+      photosMoved: number;
+      photosTotal: number;
+      /** Photos that exist on the item but could not be read on this device. */
+      photosDropped: number;
+      /** The item was in a box the target inventory has no counterpart for. */
+      boxDropped: boolean;
+    }
+  | {
+      /**
+       * Nothing was written: some photo blobs are neither cached locally nor
+       * reachable on a relay, and moving would destroy the only reference to
+       * them. Call again with `dropMissingPhotos` to accept the loss.
+       */
+      status: 'photos-missing';
+      photosMissing: number;
+      photosTotal: number;
+    };
+
+function writableEntry(docId: Id): DocEntry {
+  const handle = getStoredHandle(docId);
+  if (!handle) throw new Error('moveItem: unknown inventory');
+  if (handle.readonly || !handle.rwToken) throw new Error('moveItem: inventory is read-only');
+  if (!handle.key) throw new Error('moveItem: no encryption key for this inventory');
+  return openDoc(docId);
+}
+
+/** Same box by label, or none: box ids are per-inventory. */
+function mapBoxId(source: DocEntry, target: DocEntry, boxId: Id): Id | undefined {
+  const label = source.doc.getMap<Box>('boxes').get(boxId)?.label?.trim().toLowerCase();
+  if (!label) return undefined;
+  let found: Id | undefined;
+  target.doc.getMap<Box>('boxes').forEach((box, id) => {
+    if (!found && box.label?.trim().toLowerCase() === label) found = id;
+  });
+  return found;
+}
+
+/**
+ * Move one item from one inventory to another, both read-write on this
+ * device. The item is recreated in the target with every field carried over
+ * verbatim — quantity, translations, the full location and owner histories,
+ * and the owners-directory entries those histories reference — and only then
+ * deleted from the source, so a failure halfway never loses the item.
+ *
+ * Photos are re-added through the target's blob pipeline: they get encrypted
+ * under the TARGET content key, which gives them new hashes (photo refs are
+ * per content key, see photos.ts) and queues them for upload there. Blobs
+ * missing on this device abort the move unless `dropMissingPhotos` is set.
+ *
+ * The item keeps its id when the target has no item under it. Item share
+ * links embed the source docId, so they break on a move either way.
+ */
+export async function moveItemToInventory(
+  sourceDocId: Id,
+  targetDocId: Id,
+  itemId: Id,
+  opts?: { dropMissingPhotos?: boolean },
+): Promise<MoveItemResult> {
+  if (sourceDocId === targetDocId) throw new Error('moveItem: same inventory');
+  const source = writableEntry(sourceDocId);
+  const target = writableEntry(targetDocId);
+  await source.idb.whenSynced;
+  await target.idb.whenSynced;
+
+  const sourceItems = source.doc.getMap<Y.Map<unknown>>('items');
+  const stored = sourceItems.get(itemId);
+  if (!stored) throw new Error('moveItem: item not found');
+  const item = stored.toJSON() as Item;
+  const photos = item.photos ?? [];
+
+  // Resolve every blob BEFORE touching either doc (this may download from a
+  // relay), so the "some photos are unreachable" verdict costs nothing.
+  const carried: Array<{ ref: PhotoRef; blob: Blob }> = [];
+  for (const ref of photos) {
+    const blob = await getPhotoBlob(sourceDocId, ref.hash);
+    if (blob) carried.push({ ref, blob });
+  }
+  const missing = photos.length - carried.length;
+  if (missing > 0 && !opts?.dropMissingPhotos) {
+    return { status: 'photos-missing', photosMissing: missing, photosTotal: photos.length };
+  }
+
+  const targetItems = target.doc.getMap<Y.Map<unknown>>('items');
+  // nanoid ids practically never collide, but writing over an existing item
+  // would silently destroy it.
+  const newItemId = targetItems.has(item.id) ? newId() : item.id;
+  const boxId = item.boxId ? mapBoxId(source, target, item.boxId) : undefined;
+  const boxDropped = Boolean(item.boxId) && boxId === undefined;
+  const sourceOwners = readOwners(source.doc);
+
+  target.doc.transact(() => {
+    // ownerHistory references ownerIds; without their directory entries the
+    // target would fall back to the display names frozen into the history.
+    for (const entry of item.ownerHistory ?? []) {
+      const dir = entry.ownerId ? sourceOwners[entry.ownerId] : undefined;
+      if (entry.ownerId && dir) upsertOwner(target.doc, entry.ownerId, dir.name);
+    }
+    const moved: Item = {
+      ...item,
+      id: newItemId,
+      boxId,
+      // Photos are attached below, under the target's key.
+      photos: [],
+      // A labels-only target must never receive coordinates (same rule the
+      // write path enforces for every other location write).
+      locationHistory: (item.locationHistory ?? []).map((loc) => sanitizeLocation(target, loc)),
+      updatedAt: Date.now(),
+    };
+    targetItems.set(newItemId, new Y.Map(Object.entries(compact(moved))));
+  });
+
+  try {
+    for (const { ref, blob } of carried) {
+      await storeAddPhoto(targetDocId, newItemId, blob, ref.role);
+    }
+  } catch (err) {
+    // Leave the source untouched and undo the partial copy: better no move
+    // than two half copies.
+    targetItems.delete(newItemId);
+    throw err instanceof Error ? err : new Error('moveItem: photos could not be copied');
+  }
+
+  sourceItems.delete(itemId);
+  return {
+    status: 'moved',
+    itemId: newItemId,
+    photosMoved: carried.length,
+    photosTotal: photos.length,
+    photosDropped: missing,
+    boxDropped,
+  };
 }
 
 /**

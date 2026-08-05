@@ -39,6 +39,7 @@ import {
 } from '../components/Fields';
 import type { AiFieldKey } from '../components/Fields';
 import { ConfirmModal, Modal } from '../components/Modal';
+import { MoveItemModal } from '../components/MoveItemModal';
 import { SmartCombo } from '../components/SmartCombo';
 import { OcrScanner } from '../components/OcrScanner';
 import { PhotoGallery } from '../components/Photos';
@@ -76,6 +77,7 @@ export function ItemSheetPage() {
 
   const [sharing, setSharing] = useState(false);
   const [selling, setSelling] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
@@ -143,6 +145,18 @@ export function ItemSheetPage() {
   }
 
   if (!item) {
+    // A move deletes the item here the moment the copy landed in the target;
+    // the redirect follows on the next tick, so this is not "gone".
+    if (moving) {
+      return (
+        <>
+          <AppHeader title="Item" back={`/inv/${docId}`} />
+          <main className="page narrow">
+            <LoadingPage label="Moving item" />
+          </main>
+        </>
+      );
+    }
     // An item share link can be opened before the document has synced; only
     // call the item missing once something of the inventory has arrived.
     const stillArriving = !inv.meta && inv.syncStatus === 'connecting';
@@ -808,6 +822,12 @@ export function ItemSheetPage() {
           </button>
 
           {!readonly ? (
+            <button type="button" className="btn" onClick={() => setMoving(true)}>
+              Move to another inventory…
+            </button>
+          ) : null}
+
+          {!readonly ? (
             <button type="button" className="btn danger" onClick={() => setConfirmDelete(true)}>
               Delete item
             </button>
@@ -843,6 +863,27 @@ export function ItemSheetPage() {
           item={sheet}
           mainCurrency={mainCurrency}
           onClose={() => setSelling(false)}
+        />
+      ) : null}
+
+      {moving ? (
+        <MoveItemModal
+          docId={docId}
+          itemId={sheet.id}
+          onClose={() => setMoving(false)}
+          onMoved={(target, result) => {
+            setMoving(false);
+            const notes = result.boxDropped ? ' — the box assignment did not carry over' : '';
+            toast(`Moved to ${target.name}${notes}`);
+            if (result.photosDropped > 0) {
+              toastError(
+                `${result.photosMoved} of ${result.photosTotal} photos moved — the ${
+                  result.photosDropped === 1 ? 'missing one was' : 'missing ones were'
+                } never downloaded on this device`,
+              );
+            }
+            navigate(`/inv/${target.docId}/i/${result.itemId}`, { replace: true });
+          }}
         />
       ) : null}
 

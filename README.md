@@ -67,6 +67,13 @@ set to store **labels only** so coordinates never enter the synced document.
 **Owner tracking.** Per-item owner history (on by default, disableable per
 item or per inventory) — useful when a shipment mixes several people's things.
 
+**Moving items between inventories.** An item can be moved to any other
+inventory this device can edit, with everything it carries: quantity,
+translations, and the full location and owner history. Its photos are
+re-encrypted under the target inventory's key and queued for upload, so the
+move works offline. If a photo was never downloaded to this device, the app
+says so and asks before leaving it behind.
+
 **Statistics.** Total value, weight, and volume per inventory, broken down by
 carton and category — matching what goes on the customs manifest.
 
