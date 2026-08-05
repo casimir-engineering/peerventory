@@ -79,7 +79,7 @@ export function RelaysSection() {
         const dot = relay.enabled ? healthToDot[health[relay.url] ?? 'checking'] : 'offline';
         return (
           <div className="profile-row" key={relay.url} aria-label={`Relay ${relay.url}`}>
-            <span className={`n ${dot}`} aria-hidden="true" />
+            <span className={`sync-dot ${dot}`} aria-hidden="true" />
             <div className="grow" style={{ minWidth: 0 }}>
               <div className="small" style={{ overflowWrap: 'anywhere' }}>
                 {relay.url.replace(/^https?:\/\//, '')}

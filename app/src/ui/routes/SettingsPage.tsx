@@ -250,7 +250,7 @@ export function SettingsPage() {
               <div className="list-rows">
                 {relayConns.map((conn) => (
                   <div className="list-row" key={conn.origin} style={{ cursor: 'default' }}>
-                    <span className={`n ${conn.status}`} aria-hidden="true" />
+                    <span className={`sync-dot ${conn.status}`} aria-hidden="true" />
                     <div className="grow" style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
                       <span className="small">{conn.origin.replace(/^https?:\/\//, '')}</span>
                     </div>
@@ -264,7 +264,7 @@ export function SettingsPage() {
             )}
             {inv.p2pPeers > 0 ? (
               <p className="small">
-                <span className="n synced" aria-hidden="true" /> Direct device-to-device:{' '}
+                <span className="sync-dot synced" aria-hidden="true" /> Direct device-to-device:{' '}
                 {inv.p2pPeers} device{inv.p2pPeers === 1 ? '' : 's'} connected
               </p>
             ) : null}

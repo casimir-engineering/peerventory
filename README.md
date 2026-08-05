@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="app/public/icon-192.png" width="96" alt="Peerventory icon" />
+</p>
+
 # Peerventory
 
 Local-first inventory app for customs manifests and shipping personal effects
@@ -41,17 +45,26 @@ the alias is deliberately not shipped.
 
 ## Screenshots
 
-Demo inventory seeded on a local dev instance:
+An invented demo account seeded on a local dev instance — regenerate with
+`scripts/screenshots/`:
 
 <p align="center">
-  <img src="docs/screenshots/01-home.png" width="30%" alt="Inventories overview with per-inventory stats and sync state" />
-  <img src="docs/screenshots/02-items.png" width="30%" alt="Item list with photos, weights, cartons and converted values" />
-  <img src="docs/screenshots/03-item.png" width="30%" alt="Item sheet with photos and AI autofill" />
+  <img src="docs/screenshots/01-home.png" width="30%" alt="Home screen: the inventories on this device with item counts, totals and sync state" />
+  <img src="docs/screenshots/02-search.png" width="30%" alt="One search field finds items across every inventory on the device" />
+  <img src="docs/screenshots/03-items.png" width="30%" alt="Item list with photos, quantities, weights, cartons and values" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/04-stats.png" width="30%" alt="Inventory statistics: totals by box and category" />
-  <img src="docs/screenshots/05-share.png" width="30%" alt="Share modal with QR code and view-only / can-edit tokens" />
-  <img src="docs/screenshots/06-backup.png" width="30%" alt="Device backup QR carrying identity and inventory tokens" />
+  <img src="docs/screenshots/04-item.png" width="30%" alt="Item sheet: photos, AI autofill, values in any currency" />
+  <img src="docs/screenshots/05-move.png" width="30%" alt="Moving an item to another inventory, with its photos and history" />
+  <img src="docs/screenshots/06-share.png" width="30%" alt="Share modal: view-only or can-edit QR code carrying the decryption key" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/07-stats.png" width="30%" alt="Statistics: totals, and breakdowns by box and category" />
+  <img src="docs/screenshots/08-settings.png" width="30%" alt="Inventory settings: boxes and the three export formats" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/09-account.png" width="30%" alt="Account and sync: your devices, the device-link QR and the account backup" />
+  <img src="docs/screenshots/10-relays.png" width="30%" alt="Account and sync: relays with health dots, direct device-to-device sync, AI key" />
 </p>
 
 ## What it does
@@ -61,6 +74,14 @@ weight and size quick-classes (refinable to exact grams and L×W×H mm),
 serial numbers, HS codes, lithium-battery flag, country of origin,
 condition, purchase info, translations — the fields a forwarder or customs
 desk actually asks about, and that an AI cannot reconstruct later.
+
+**One list, one search.** The home screen shows every inventory on the
+device with its item count, value, weight, volume and last sync, and its
+search field looks inside all of them at once — descriptions, brands,
+categories, serial numbers, conditions and place labels — so an item is one
+query away even when you cannot remember which shipment it went into.
+Everything about you and this phone (devices, backups, relays, AI key) sits
+behind the ⚙︎ icon in the header, on the **Account & sync** screen.
 
 **Sync that survives bad networks.** The store is a Yjs CRDT persisted in
 IndexedDB. Everything works offline; changes merge conflict-free when a
@@ -103,17 +124,23 @@ says so and asks before leaving it behind.
 **Statistics.** Total value, weight, and volume per inventory, broken down by
 carton and category — matching what goes on the customs manifest.
 
-**Exports and imports.** One-tap YAML (canonical backup), XLSX customs
-manifest, or ZIP archive with all photos. The same files import back —
-drag-and-drop them onto the app (or use Import file) to rebuild an inventory,
-photos included.
+**Exports and imports.** An inventory's Settings has one tap each for
+**Spreadsheet (.xlsx)** (the customs manifest, with photo thumbnails),
+**Archive with photos (.zip)** (spreadsheet + data file + every photo) and
+**Data only (.yaml)** (the canonical backup); a selection of items can be
+exported to a spreadsheet of its own from any list. The same files import
+back — drop them anywhere on the home screen (or use Restore / import from
+file on Account & sync) to rebuild an inventory, photos included.
 
-**Link a device / backup.** Your devices form one account: scan the small
-device-link QR on a second phone and it joins, then every inventory — today's
-and tomorrow's — arrives through sync. A separate full-backup link carries
-every access token for archiving or offline restore. Backups never downgrade
-existing local access, and "Unlink this device" cleanly removes an account
-from one phone without touching the others.
+**Link a device / backup.** Your devices form one account: on **Account &
+sync**, "Link another device" shows a small QR, you scan it with Open / Scan
+on the second phone, and every inventory — today's and tomorrow's — arrives
+through sync. "Share backup (.zip)" writes one file with the whole account
+and the full contents of every inventory; a full-backup link or QR image
+carries every access token alone, for archiving or for the browser
+extension. Backups never downgrade existing local access, and "Leave account
+on this device" cleanly removes the account from one phone without touching
+the others.
 
 **On-device AI autofill (optional).** Point it at the item photos and it
 fills description, brand, values, weight, dimensions, HS code, translations.
@@ -186,9 +213,10 @@ cd deploy && echo 'INVENTORY_HOST=inv.example.com' > .env && docker compose up -
 # ...or behind an existing reverse proxy: see deploy/npm-proxy/README.md
 ```
 
-Then, in the app, open **You & this device → Sync relays → Add** and enter
-`inv.example.com`; new inventories will use it automatically, and "Replicate
-to all my relays" in an inventory's settings pushes existing ones there.
+Then, in the app, open **⚙︎ Account & sync → Sync & relays** and add
+`inv.example.com`; each relay shows a health dot once it answers. New
+inventories use it automatically, and "Replicate to all my relays" in an
+inventory's Settings pushes existing ones there.
 
 ## Layout
 
@@ -204,6 +232,8 @@ to all my relays" in an inventory's settings pushes existing ones there.
   (`deploy/`), or behind an existing reverse proxy (`deploy/npm-proxy/`)
 - `design/` — `icon-source.png`, the 1024×1024 master every app icon is cut
   from, plus the generated `icon-preview.png` contact sheet
+- `scripts/screenshots/` — Playwright driver that seeds an invented demo
+  account into a dev build and recaptures every image above
 - `CONTRACTS.md` — binding protocol contracts between app and server
 - `docs/screenshots/` — the images above
 
@@ -217,7 +247,10 @@ npm run dev                                 # PWA on http://localhost:5173
 ```
 
 In dev builds the store is exposed as `window.__store` / `window.__services`
-for console debugging and demo seeding.
+for console debugging and demo seeding. The README screenshots are produced
+through that hook: with the dev server and a local relay running,
+`npm install && npm run capture` in `scripts/screenshots/` reseeds the demo
+account and rewrites `docs/screenshots/` (details in `capture.mjs`).
 
 ## Building
 

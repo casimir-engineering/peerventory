@@ -1,0 +1,12 @@
+{
+  "name": "peerventory-screenshots",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "capture": "node capture.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
