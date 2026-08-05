@@ -20,7 +20,7 @@ import { PhotoImage } from '../components/Photos';
 import { Field, Toggle, useCurrencyComboOptions } from '../components/Fields';
 import { SmartCombo } from '../components/SmartCombo';
 import { ImportModal } from '../components/ImportModal';
-import { Modal } from '../components/Modal';
+import { ConfirmModal, Modal } from '../components/Modal';
 import { QrCanvas } from '../components/QrCanvas';
 import { QrScanner } from '../components/QrScanner';
 import { RelaysSection } from '../components/RelaysSection';
@@ -210,9 +210,10 @@ function SearchResultRow({ result }: { result: SearchResult }) {
 export function InventoriesPage() {
   const navigate = useNavigate();
   const { toast, toastError } = useToast();
-  const { handles, createInventory }: UseInventoriesResult = useInventories();
+  const { handles, createInventory, unlinkDevice }: UseInventoriesResult = useInventories();
 
   const [creating, setCreating] = useState(false);
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [joining, setJoining] = useState(false);
   const [userName, setUserNameState] = useState(() => services.getUserName());
   const [nameModal, setNameModal] = useState<'welcome' | 'edit' | null>(() =>
@@ -243,30 +244,41 @@ export function InventoriesPage() {
     [searching, searchable, debouncedQuery],
   );
 
-  /** One entry point for anything scanned, pasted, or decoded from an image. */
+  /**
+   * One entry point for anything scanned, pasted, or decoded from an image.
+   * Always returns a reason when it refuses: a scanner that silently ignores
+   * a code the user is pointing at is indistinguishable from a broken camera.
+   */
   const handleScannedText = useCallback(
-    (text: string): boolean => {
+    (text: string): { ok: true } | { ok: false; reason: string } => {
       const aiKey = services.parseAiKeyQr(text);
       if (aiKey) {
         services.setAiKey(aiKey);
         setAiKeyMasked(services.maskedAiKey());
         setJoining(false);
         toast('Claude API key installed on this device');
-        return true;
+        return { ok: true };
       }
       const backupPayload = services.parseBackupText(text);
       if (backupPayload) {
         setJoining(false);
         navigate(`/restore/${backupPayload}`);
-        return true;
+        return { ok: true };
       }
       const parsed = parseShareLink(text);
-      if (!parsed) return false;
+      if (!parsed) {
+        return {
+          ok: false,
+          reason: /^https?:\/\//i.test(text.trim())
+            ? 'That is a web link, but not an inventory or device code.'
+            : 'That code is not an inventory link or device code.',
+        };
+      }
       // A pasted/scanned link's origin is a relay hint the join flow records.
       if (parsed.origin) rememberRelayHint(parsed.docId, parsed.origin);
       setJoining(false);
       navigate(joinRoute(parsed));
-      return true;
+      return { ok: true };
     },
     [navigate, toast],
   );
@@ -295,9 +307,8 @@ export function InventoriesPage() {
           toastError('No QR code found in this image');
           return;
         }
-        if (!handleScannedText(text)) {
-          toastError('The QR code in this image is not a known link');
-        }
+        const outcome = handleScannedText(text);
+        if (!outcome.ok) toastError(outcome.reason);
         return;
       }
       toastError('Drop a .zip or .yaml export, or a QR code image');
@@ -411,7 +422,24 @@ export function InventoriesPage() {
                     Import file
                   </button>
                   <button type="button" className="link-btn" onClick={() => setBackupModal(true)}>
-                    Backup
+                    Link / backup
+                  </button>
+                </div>
+
+                <div className="profile-row" aria-label="Account">
+                  <div className="grow">
+                    <div className="tiny faint">Account</div>
+                    <div className="small">
+                      {handles.length} inventor{handles.length === 1 ? 'y' : 'ies'} synced across
+                      your linked devices
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="link-btn danger"
+                    onClick={() => setConfirmUnlink(true)}
+                  >
+                    Unlink this device
                   </button>
                 </div>
 
@@ -547,16 +575,30 @@ export function InventoriesPage() {
       {joining ? (
         <JoinLinkModal
           onClose={() => setJoining(false)}
-          onOpen={(link) => {
-            if (handleScannedText(link)) return true;
-            toastError('That does not look like an inventory share link');
-            return false;
-          }}
+          onOpen={handleScannedText}
           onUploadImage={(file) => void handleFile(file)}
         />
       ) : null}
 
       {backupModal ? <BackupModal onClose={() => setBackupModal(false)} /> : null}
+
+      {confirmUnlink ? (
+        <ConfirmModal
+          title="Unlink this device?"
+          body={`This device will leave the account and delete its ${handles.length} inventor${handles.length === 1 ? 'y' : 'ies'}, photos and access tokens from this phone. Your other devices keep everything. To come back later, scan the device-link code from one of them.`}
+          confirmLabel="Unlink"
+          destructive
+          onClose={() => setConfirmUnlink(false)}
+          onConfirm={() => {
+            toast('Unlinking…');
+            unlinkDevice()
+              .then(() => toast('This device left the account'))
+              .catch((err: unknown) =>
+                toastError(err instanceof Error ? err.message : 'Could not unlink this device'),
+              );
+          }}
+        />
+      ) : null}
 
       {importState ? (
         <ImportModal
@@ -917,31 +959,42 @@ function CreateInventoryModal({
   );
 }
 
+/**
+ * Two different things live here, and conflating them is what made the QR
+ * unscannable: the DEVICE LINK (tiny, camera-friendly, everything else
+ * arrives via profile sync) and the FULL BACKUP (every token, for links and
+ * files, where size costs nothing).
+ */
 function BackupModal({ onClose }: { onClose: () => void }) {
   const { toast, toastError } = useToast();
-  const [payload] = useState(() => services.encodeBackup());
-  const url = buildBackupUrl(payload);
+  const [linkPayload] = useState(() => services.encodeLinkToken());
+  const [backupPayload] = useState(() => services.encodeBackup());
+  const linkUrl = buildBackupUrl(linkPayload);
+  const backupUrl = buildBackupUrl(backupPayload);
 
-  const copyLink = async () => {
+  const copy = async (text: string, label: string) => {
     try {
-      await navigator.clipboard.writeText(url);
-      toast('Backup link copied');
+      await navigator.clipboard.writeText(text);
+      toast(`${label} copied`);
     } catch {
       toastError('Clipboard unavailable — long-press the link to copy it');
     }
   };
 
-  const downloadQr = async () => {
+  const downloadQr = async (url: string, kind: 'device-link' | 'full-backup') => {
     try {
       const dataUrl = await QRCode.toDataURL(url, {
-        width: 640,
+        // A saved image is decoded from clean pixels, not through a camera,
+        // so the dense full backup survives here even though it cannot be
+        // scanned off a screen.
+        width: kind === 'full-backup' ? 1280 : 640,
         margin: 2,
-        errorCorrectionLevel: 'M',
+        errorCorrectionLevel: kind === 'full-backup' ? 'M' : 'Q',
         color: { dark: '#0b0e11', light: '#ffffff' },
       });
       const a = document.createElement('a');
       a.href = dataUrl;
-      a.download = `inventory-backup-${new Date().toISOString().slice(0, 10)}.png`;
+      a.download = `peerventory-${kind}-${new Date().toISOString().slice(0, 10)}.png`;
       a.click();
     } catch {
       toastError('This backup is too large for a QR code — use the link instead');
@@ -950,7 +1003,7 @@ function BackupModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal
-      title="Backup / transfer"
+      title="Link a device / backup"
       onClose={onClose}
       footer={
         <button type="button" className="btn grow" onClick={onClose}>
@@ -959,25 +1012,51 @@ function BackupModal({ onClose }: { onClose: () => void }) {
       }
     >
       <p className="small muted">
-        This code carries your name, your inventories with their access tokens, and your API key
-        if one is set. Scan it with Open / Scan on the other device (or open the link there) to
-        link the devices permanently. Anyone holding it gets the same access — treat it like a
-        password.
+        <strong>Link a device to this account.</strong> Scan this with Open / Scan on your other
+        device: it joins your account and every inventory follows through sync — including the
+        ones you add later. To share a single inventory with someone else, use Share inside that
+        inventory instead.
       </p>
-      <QrCanvas value={url} size={264} />
+      <QrCanvas value={linkUrl} size={308} ecc="Q" />
       <div className="row" style={{ justifyContent: 'center' }}>
-        <button type="button" className="link-btn" onClick={() => void copyLink()}>
+        <button type="button" className="link-btn" onClick={() => void copy(linkUrl, 'Link')}>
           Copy link
         </button>
-        <button type="button" className="link-btn" onClick={() => void downloadQr()}>
+        <button
+          type="button"
+          className="link-btn"
+          onClick={() => void downloadQr(linkUrl, 'device-link')}
+        >
           Save QR image
         </button>
       </div>
       <p className="tiny faint">
-        The code contains access tokens, not the data itself: the other device pulls items and
-        photos from sync after import. Linked devices share one profile — inventories you create
-        or join later appear on all of them automatically, no fresh backup needed.
+        The code carries access to your account, not the data itself. Anyone holding it gets
+        everything you have — treat it like a password.
       </p>
+      <hr />
+      <p className="tiny faint">
+        <strong>Full backup.</strong> Every inventory token in one payload, for archiving, for
+        restoring onto a device that will never reach a relay, and for connecting the browser
+        extension. Far too dense to read off a screen with a camera, so use the link — or the
+        saved image, which decodes from clean pixels.
+      </p>
+      <div className="row" style={{ justifyContent: 'center' }}>
+        <button
+          type="button"
+          className="link-btn"
+          onClick={() => void copy(backupUrl, 'Full backup link')}
+        >
+          Copy full backup link
+        </button>
+        <button
+          type="button"
+          className="link-btn"
+          onClick={() => void downloadQr(backupUrl, 'full-backup')}
+        >
+          Save full backup image
+        </button>
+      </div>
     </Modal>
   );
 }
@@ -988,13 +1067,14 @@ function JoinLinkModal({
   onUploadImage,
 }: {
   onClose: () => void;
-  /** Returns true when the text was accepted as a share link. */
-  onOpen: (link: string) => boolean;
+  /** Accepts the text, or explains why it was refused. */
+  onOpen: (link: string) => { ok: true } | { ok: false; reason: string };
   onUploadImage: (file: File) => void;
 }) {
   const [mode, setMode] = useState<'scan' | 'paste'>('scan');
   const [link, setLink] = useState('');
-  const [scanError, setScanError] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [stalled, setStalled] = useState(false);
   const uploadRef = useRef<HTMLInputElement | null>(null);
 
   const uploadInput = (
@@ -1011,9 +1091,11 @@ function JoinLinkModal({
     />
   );
 
+  const [pasteError, setPasteError] = useState<string | null>(null);
+
   return (
     <Modal
-      title="Open a share link"
+      title="Open a code or link"
       onClose={onClose}
       footer={
         <>
@@ -1025,7 +1107,10 @@ function JoinLinkModal({
               type="button"
               className="btn primary grow"
               disabled={!link.trim()}
-              onClick={() => onOpen(link)}
+              onClick={() => {
+                const outcome = onOpen(link);
+                setPasteError(outcome.ok ? null : outcome.reason);
+              }}
             >
               Open
             </button>
@@ -1040,18 +1125,25 @@ function JoinLinkModal({
       {mode === 'scan' ? (
         <>
           <QrScanner
-            paused={scanError}
+            paused={scanError !== null}
+            onStalled={() => setStalled(true)}
             onResult={(text) => {
-              if (!onOpen(text)) {
-                setScanError(true);
-                setTimeout(() => setScanError(false), 1500);
+              setStalled(false);
+              const outcome = onOpen(text);
+              if (!outcome.ok) {
+                setScanError(outcome.reason);
+                setTimeout(() => setScanError(null), 2500);
               }
             }}
           />
-          <p className="tiny faint" style={{ textAlign: 'center' }}>
-            {scanError
-              ? 'That code is not an inventory share link.'
-              : 'Point the camera at a share QR code.'}
+          <p
+            className={scanError ? 'tiny warn-text' : 'tiny faint'}
+            style={{ textAlign: 'center' }}
+          >
+            {scanError ??
+              (stalled
+                ? 'Still nothing. Hold steady about 20 cm away, raise the other screen’s brightness — or use the link instead.'
+                : 'Point the camera at a share link or a device-link QR code.')}
           </p>
           <div className="row" style={{ justifyContent: 'center' }}>
             <button type="button" className="link-btn" onClick={() => uploadRef.current?.click()}>
@@ -1062,15 +1154,22 @@ function JoinLinkModal({
         </>
       ) : (
         <>
-          <Field label="Share link" hint="Paste a link that ends in /#/join/...">
+          <Field
+            label="Share or device link"
+            hint="A link that contains /#/join/… (an inventory) or /#/restore/… (a device link)"
+          >
             <textarea
               className="textarea"
               autoFocus
               value={link}
               placeholder="https://example.com/#/join/..."
-              onChange={(e) => setLink(e.target.value)}
+              onChange={(e) => {
+                setLink(e.target.value);
+                setPasteError(null);
+              }}
             />
           </Field>
+          {pasteError ? <p className="tiny warn-text">{pasteError}</p> : null}
           <div className="row">
             <button
               type="button"
@@ -1086,7 +1185,15 @@ function JoinLinkModal({
             >
               Paste from clipboard
             </button>
-            <button type="button" className="link-btn" onClick={() => setMode('scan')}>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                setPasteError(null);
+                setStalled(false);
+                setMode('scan');
+              }}
+            >
               Scan QR code
             </button>
           </div>

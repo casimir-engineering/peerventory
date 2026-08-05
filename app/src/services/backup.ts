@@ -13,6 +13,20 @@
  * links the devices permanently — inventories created later flow through
  * profile sync instead of needing a fresh backup. v1 payloads (no keys) and
  * v2 payloads without `oi`/`p` are still accepted and import statically.
+ *
+ * TWO FLAVOURS of the same v2 payload:
+ * - LINK TOKEN (encodeLinkToken): identity + `p` only, `h` empty. This is what
+ *   the on-screen QR carries. Everything else reaches the other device
+ *   through profile sync once it has joined, so there is no reason to push
+ *   every token through a camera — and every reason not to: the full payload
+ *   of a real profile needs QR version 29-37 (133-157 modules), which a phone
+ *   camera cannot read off another phone's screen, and past ~11 inventories
+ *   it does not fit in a QR code at all.
+ * - FULL BACKUP (encodeBackup): every handle as well, for links, files and
+ *   archives — paths with no density limit — and for restoring onto a device
+ *   that will never reach the relay.
+ * Both decode through decodeBackup; a link token is simply one with no
+ * handles, which older builds already import correctly.
  */
 
 import {
@@ -28,6 +42,7 @@ import { getAiKey, setAiKey } from './aikey';
 import {
   ensureProfileDocHandle,
   getLastCurrency,
+  getProfileDocHandle,
   getOwnerAliases,
   getOwnerId,
   getStoredOwnerId,
@@ -93,6 +108,36 @@ function fromBase64Url(payload: string): string | null {
   }
 }
 
+/** The profile-doc handle in wire form, when this device has a usable one. */
+function profileWire(): WirePayload['p'] | undefined {
+  const prof = ensureProfileDocHandle();
+  if (!prof.key || (!prof.rwToken && !prof.roToken)) return undefined;
+  return {
+    d: prof.docId,
+    ...(prof.rwToken ? { rw: prof.rwToken } : {}),
+    ...(prof.roToken ? { ro: prof.roToken } : {}),
+    ek: prof.key,
+  };
+}
+
+/**
+ * "Join my account" token: identity + the profile-doc handle, nothing else.
+ * Small enough (~230 bytes, QR version 12) to be read off a phone screen by
+ * another phone's camera, and complete enough that the joining device
+ * receives every inventory through profile sync moments later.
+ */
+export function encodeLinkToken(): string {
+  // `h: []` rather than a new payload version on purpose: builds that predate
+  // the link token still decode this and still join the profile.
+  const wire: WirePayload = { v: 2, h: [] };
+  const name = getUserName();
+  if (name) wire.n = name;
+  wire.oi = getOwnerId();
+  const p = profileWire();
+  if (p) wire.p = p;
+  return toBase64Url(JSON.stringify(wire));
+}
+
 /** Everything this device knows, as an opaque payload string. */
 export function encodeBackup(): string {
   const wire: WirePayload = {
@@ -110,15 +155,8 @@ export function encodeBackup(): string {
   wire.oi = getOwnerId();
   // The profile-doc handle makes this backup a permanent device link: the
   // importing device joins the synced inventory list instead of copying it.
-  const prof = ensureProfileDocHandle();
-  if (prof.key && (prof.rwToken || prof.roToken)) {
-    wire.p = {
-      d: prof.docId,
-      ...(prof.rwToken ? { rw: prof.rwToken } : {}),
-      ...(prof.roToken ? { ro: prof.roToken } : {}),
-      ek: prof.key,
-    };
-  }
+  const prof = profileWire();
+  if (prof) wire.p = prof;
   const aliases = getOwnerAliases();
   if (Object.keys(aliases).length > 0) wire.a = aliases;
   const currency = getLastCurrency();
@@ -141,7 +179,10 @@ export function decodeBackup(payload: string): DecodedBackup | null {
   if (!json) return null;
   try {
     const wire = JSON.parse(json) as WirePayload;
-    if ((wire.v !== 1 && wire.v !== 2) || !Array.isArray(wire.h)) return null;
+    if (wire.v !== 1 && wire.v !== 2) return null;
+    const handles = Array.isArray(wire.h) ? wire.h : [];
+    // A payload with neither handles nor a profile handle carries nothing.
+    if (handles.length === 0 && !wire.p) return null;
     return {
       name: typeof wire.n === 'string' ? wire.n : undefined,
       ownerId: typeof wire.oi === 'string' && wire.oi ? wire.oi : undefined,
@@ -157,7 +198,7 @@ export function decodeBackup(payload: string): DecodedBackup | null {
               key: typeof wire.p.ek === 'string' ? wire.p.ek : undefined,
             }
           : undefined,
-      handles: wire.h
+      handles: handles
         .filter((h) => typeof h?.d === 'string' && h.d)
         .map((h) => ({
           docId: h.d,
@@ -180,6 +221,29 @@ export interface ImportBackupResult {
   aiKeyApplied: boolean;
   /** This device joined (or switched to) the backup's synced profile. */
   profileLinked: boolean;
+}
+
+/**
+ * How a payload relates to the account this device is already on. Drives the
+ * restore screen: joining is a no-op, a top-up, or an account switch that
+ * must be confirmed — never a silent surprise.
+ */
+export type BackupRelation =
+  | 'same-account'
+  | 'other-account'
+  | 'no-account'
+  | 'static';
+
+export function backupRelation(backup: DecodedBackup): BackupRelation {
+  if (!backup.profile) return 'static';
+  const local = getProfileDocHandle();
+  if (!local) return 'no-account';
+  return local.docId === backup.profile.docId ? 'same-account' : 'other-account';
+}
+
+/** A "link a device" QR: identity + account handle, no inventory tokens. */
+export function isLinkToken(backup: DecodedBackup): boolean {
+  return backup.handles.length === 0 && Boolean(backup.profile);
 }
 
 /**

@@ -3,7 +3,14 @@
  * a persisted background upload queue per doc ('uploadq:<docId>'), and
  * download-on-demand from the blob HTTP API (see CONTRACTS.md).
  */
-import { get as idbGet, set as idbSet, del as idbDel, update as idbUpdate } from 'idb-keyval';
+import {
+  get as idbGet,
+  set as idbSet,
+  del as idbDel,
+  delMany as idbDelMany,
+  keys as idbKeys,
+  update as idbUpdate,
+} from 'idb-keyval';
 import { useEffect, useState } from 'react';
 import * as Y from 'yjs';
 import type { Id, PhotoRef, PhotoRole } from '../types';
@@ -170,6 +177,24 @@ async function enqueueUpload(docId: Id, hash: string, mime: string): Promise<voi
 
 export async function clearUploadQueue(docId: Id): Promise<void> {
   await idbDel(queueKey(docId)).catch(() => {});
+}
+
+/**
+ * Wipe every cached photo blob and pending upload (unlink flow). Blobs are
+ * content-addressed globally rather than per doc, so there is nothing finer
+ * grained to delete once all inventories are gone from this device.
+ */
+export async function clearAllPhotoData(): Promise<void> {
+  try {
+    const all = await idbKeys();
+    const doomed = all.filter(
+      (k): k is string =>
+        typeof k === 'string' && (k.startsWith('blob:') || k.startsWith('uploadq:')),
+    );
+    if (doomed.length > 0) await idbDelMany(doomed);
+  } catch {
+    // best-effort: a locked-down WebView may deny IndexedDB enumeration
+  }
 }
 
 const runningLoops = new Map<Id, { rerun: boolean }>();

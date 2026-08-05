@@ -26,14 +26,24 @@ async function makeNativeDetector(): Promise<BarcodeDetectorLike | null> {
 }
 
 const SCAN_INTERVAL_MS = 200;
-const JSQR_MAX_EDGE = 640;
+/**
+ * Downscaling helps jsQR find the finder patterns, but cutting a dense code
+ * below ~2px per module destroys it. 1024 keeps a version-25 code readable
+ * while staying fast enough for a 5fps loop.
+ */
+const JSQR_MAX_EDGE = 1024;
+/** Nothing decoded for this long: tell the user instead of staring silently. */
+const STALLED_AFTER_MS = 6_000;
 
 export function QrScanner({
   onResult,
+  onStalled,
   paused = false,
 }: {
   /** Called once per decoded code; scanning pauses until `paused` flips back to false. */
   onResult: (text: string) => void;
+  /** Fired once when several seconds of scanning have decoded nothing at all. */
+  onStalled?: () => void;
   /** Freeze scanning (e.g. while showing an "invalid code" message). */
   paused?: boolean;
 }) {
@@ -42,11 +52,14 @@ export function QrScanner({
   pausedRef.current = paused;
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
+  const onStalledRef = useRef(onStalled);
+  onStalledRef.current = onStalled;
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let stream: MediaStream | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let stalledTimer: ReturnType<typeof setTimeout> | null = null;
     let stopped = false;
     let lastValue = '';
 
@@ -60,7 +73,13 @@ export function QrScanner({
       }
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
+          // A denser code needs the pixels: a 640x480 default frame cannot
+          // resolve the modules of anything past about QR version 15.
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           audio: false,
         });
       } catch (err) {
@@ -84,6 +103,10 @@ export function QrScanner({
       await video.play().catch(() => {});
 
       const native = await makeNativeDetector();
+
+      stalledTimer = setTimeout(() => {
+        if (!stopped) onStalledRef.current?.();
+      }, STALLED_AFTER_MS);
 
       const tick = async () => {
         if (stopped) return;
@@ -110,6 +133,10 @@ export function QrScanner({
           }
           if (value && value !== lastValue) {
             lastValue = value;
+            if (stalledTimer) {
+              clearTimeout(stalledTimer);
+              stalledTimer = null;
+            }
             onResultRef.current(value);
           }
           if (!value) lastValue = '';
@@ -123,6 +150,7 @@ export function QrScanner({
     return () => {
       stopped = true;
       if (timer) clearTimeout(timer);
+      if (stalledTimer) clearTimeout(stalledTimer);
       stream?.getTracks().forEach((t) => t.stop());
     };
   }, []);

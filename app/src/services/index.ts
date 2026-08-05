@@ -32,6 +32,14 @@ export {
   parseAiKeyQr,
   AI_KEY_QR_PREFIX,
 } from './aikey';
-export { encodeBackup, parseBackupText, decodeBackup, importBackup } from './backup';
-export type { DecodedBackup, ImportBackupResult } from './backup';
+export {
+  encodeBackup,
+  encodeLinkToken,
+  parseBackupText,
+  decodeBackup,
+  importBackup,
+  backupRelation,
+  isLinkToken,
+} from './backup';
+export type { BackupRelation, DecodedBackup, ImportBackupResult } from './backup';
 export { getOwnerAliases } from './profile';

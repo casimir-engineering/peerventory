@@ -127,6 +127,12 @@ async function connectFromText(text: string): Promise<void> {
         'Not a profile share link. In the app: Inventories → Backup / transfer → copy the link (or use the QR).',
         'err',
       );
+    } else if (result.reason === 'link-token') {
+      setStatus(
+        status,
+        'That is the device-link code — it carries no inventories. In the app: Inventories → Link / backup → "Copy full backup link".',
+        'err',
+      );
     } else if (result.reason === 'needs-origin') {
       $('ob-origin-row').hidden = false;
       setStatus(

@@ -71,6 +71,12 @@ export interface UseInventoriesResult {
   joinInventory(docId: Id, token: string, key?: string): Promise<InventoryHandle>;
   /** Remove from this device only (doc data deleted locally). */
   forgetInventory(docId: Id): Promise<void>;
+  /**
+   * Leave this device's account: wipe every synced inventory, photo and
+   * token locally and start a fresh empty account. Other devices of the old
+   * account are untouched (no tombstones are written).
+   */
+  unlinkDevice(): Promise<void>;
 }
 
 export interface UseInventoryResult {

@@ -139,9 +139,9 @@ export function startProfileSync(): void {
   openEngine(ensureProfileDocHandle());
 }
 
-function stopEngine(): void {
+function stopEngine(opts?: { clearData?: boolean }): Promise<void> {
   const e = engine;
-  if (!e) return;
+  if (!e) return Promise.resolve();
   engine = null;
   e.destroyed = true;
   clearTimeout(e.applyTimer);
@@ -154,10 +154,29 @@ function stopEngine(): void {
     } catch { /* ignore */ }
   }
   e.providers.clear();
-  void e.e2ee.destroy();
-  void e.idb.destroy().catch(() => {});
-  e.doc.destroy();
+  pendingLive.clear();
   setStatus('offline');
+  const done = Promise.all([
+    e.e2ee.destroy({ clearData: opts?.clearData }).catch(() => {}),
+    (opts?.clearData ? e.idb.clearData() : e.idb.destroy()).catch(() => {}),
+  ]).then(() => {
+    e.doc.destroy();
+  });
+  return done;
+}
+
+/**
+ * Leave the current account (unlink flow): tear the engine down and, with
+ * clearData, drop this account's locally cached profile doc as well. No
+ * tombstones are written — the other devices of that account keep everything.
+ */
+export function stopProfileSync(opts?: { clearData?: boolean }): Promise<void> {
+  return stopEngine(opts);
+}
+
+/** docId of the account (profile doc) this device currently belongs to. */
+export function currentProfileDocId(): string | null {
+  return getProfileDocHandle()?.docId ?? null;
 }
 
 function openEngine(handle: ProfileDocHandle): void {
@@ -490,7 +509,9 @@ export function adoptProfileHandle(p: {
     return false;
   }
   setProfileDocHandle({ docId: p.docId, rwToken: p.rwToken, roToken: p.roToken, key: p.key });
-  stopEngine();
+  // The previous account's cached profile doc stays on disk: it is harmless
+  // and lets a mistaken switch be undone by re-importing that account's code.
+  void stopEngine();
   openEngine(getProfileDocHandle()!);
   return true;
 }

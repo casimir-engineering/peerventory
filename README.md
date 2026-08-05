@@ -75,9 +75,12 @@ manifest, or ZIP archive with all photos. The same files import back —
 drag-and-drop them onto the app (or use Import file) to rebuild an inventory,
 photos included.
 
-**Device backup / transfer.** A single QR or link carries your identity and
-the access tokens of all your inventories; scan it on a new device and
-everything merges over sync. Backups never downgrade existing local access.
+**Link a device / backup.** Your devices form one account: scan the small
+device-link QR on a second phone and it joins, then every inventory — today's
+and tomorrow's — arrives through sync. A separate full-backup link carries
+every access token for archiving or offline restore. Backups never downgrade
+existing local access, and "Unlink this device" cleanly removes an account
+from one phone without touching the others.
 
 **On-device AI autofill (optional).** Point it at the item photos and it
 fills description, brand, values, weight, dimensions, HS code, translations.

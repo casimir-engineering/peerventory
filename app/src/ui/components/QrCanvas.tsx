@@ -3,9 +3,19 @@ import QRCode from 'qrcode';
 
 /**
  * QR is the offline handoff path: a customs officer scans the screen rather
- * than typing a URL, so error correction is kept high.
+ * than typing a URL. Short payloads get the stronger error correction, which
+ * costs a few modules and buys tolerance for glare and moiré when one phone
+ * reads the code off another phone's screen.
  */
-export function QrCanvas({ value, size = 232 }: { value: string; size?: number }) {
+export function QrCanvas({
+  value,
+  size = 232,
+  ecc = 'M',
+}: {
+  value: string;
+  size?: number;
+  ecc?: 'L' | 'M' | 'Q' | 'H';
+}) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -16,7 +26,7 @@ export function QrCanvas({ value, size = 232 }: { value: string; size?: number }
     QRCode.toCanvas(canvas, value, {
       width: size,
       margin: 1,
-      errorCorrectionLevel: 'M',
+      errorCorrectionLevel: ecc,
       color: { dark: '#0b0e11', light: '#ffffff' },
     })
       .then(() => {
@@ -28,7 +38,7 @@ export function QrCanvas({ value, size = 232 }: { value: string; size?: number }
     return () => {
       cancelled = true;
     };
-  }, [value, size]);
+  }, [value, size, ecc]);
 
   if (error) {
     return <p className="small muted">QR code unavailable for this link: {error}</p>;

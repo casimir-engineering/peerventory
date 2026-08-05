@@ -28,7 +28,9 @@ async function handleText(text: string): Promise<void> {
     setStatus(
       result.reason === 'not-a-link'
         ? 'That QR is not a Peerventory profile code — scan the backup QR from the app.'
-        : 'Could not read the profile payload from that QR.',
+        : result.reason === 'link-token'
+          ? 'That is the app\u2019s device-link code: it links phones, but carries no inventories. Use "Copy full backup link" in the app and paste it here.'
+          : 'Could not read the profile payload from that QR.',
       'err',
     );
     return;

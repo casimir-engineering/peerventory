@@ -215,6 +215,11 @@ hr {
   color: var(--faint);
 }
 
+/* Consequential-but-not-broken copy: account switches, destructive confirms. */
+.warn-text {
+  color: var(--warn);
+}
+
 .small {
   font-size: 0.8125rem;
 }
@@ -364,6 +369,10 @@ hr {
   font-size: 0.875rem;
   cursor: pointer;
   text-align: left;
+}
+
+.link-btn.danger {
+  color: var(--danger);
 }
 
 /* ---------------------------------------------------------------- cards */
@@ -1111,10 +1120,14 @@ table.data th.num {
   border-radius: var(--radius);
 }
 
+/* Never scale the bitmap to a fixed CSS size: resampling a QR to a
+   non-integer module width is exactly what makes it unreadable to a camera.
+   The canvas is rendered at its requested size and only ever shrinks to fit. */
 .qr-wrap canvas {
   display: block;
-  width: 232px;
-  height: 232px;
+  width: auto;
+  max-width: 100%;
+  height: auto;
   image-rendering: pixelated;
 }
 

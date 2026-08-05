@@ -42,11 +42,18 @@ import { newId, newToken } from './ids';
 import { readOwners, resolveOwnerIdForName, upsertOwner } from './owners';
 import {
   addPhoto as storeAddPhoto,
+  clearAllPhotoData,
   clearUploadQueue,
   enqueueDocPhotos,
   kickUploadLoop,
 } from './photos';
-import { profileRecordInventory, profileRecordRemoval } from './profileSync';
+import {
+  profileRecordInventory,
+  profileRecordRemoval,
+  startProfileSync,
+  stopProfileSync,
+} from './profileSync';
+import { resetProfileIdentity } from '../services/profile';
 import {
   defaultRelayOrigin,
   enabledRelayOrigins,
@@ -235,9 +242,29 @@ async function forgetInventory(docId: Id): Promise<void> {
   profileRecordRemoval(docId);
 }
 
+/**
+ * Leave the account (device group) this device belongs to and start over with
+ * a fresh, empty one. Everything synced here is deleted locally — handles,
+ * doc data, photo blobs, pending uploads — but nothing is tombstoned in the
+ * account being left, so the other devices keep all of it. The user's name
+ * and ownerId survive: it is the same person, just an unlinked device.
+ */
+async function unlinkDevice(): Promise<void> {
+  const docIds = getHandlesSnapshot().map((h) => h.docId);
+  await stopProfileSync({ clearData: true });
+  for (const docId of docIds) {
+    await closeDoc(docId, { clearData: true }).catch(() => {});
+    await clearUploadQueue(docId);
+    removeHandle(docId);
+  }
+  await clearAllPhotoData();
+  resetProfileIdentity();
+  startProfileSync();
+}
+
 export function useInventories(): UseInventoriesResult {
   const handles = useSyncExternalStore(subscribeRegistry, getHandlesSnapshot);
-  return { handles, createInventory, joinInventory, forgetInventory };
+  return { handles, createInventory, joinInventory, forgetInventory, unlinkDevice };
 }
 
 /* ---------------- useInventory ---------------- */

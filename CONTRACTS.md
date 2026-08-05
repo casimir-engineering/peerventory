@@ -196,6 +196,18 @@ Design alternatives considered (decision record):
   carries `oi` (the user's stable owner id, see "Owner identity") and `p`
   (the synced-profile doc handle, see "Synced profile"); v1 payloads (no
   keys) and payloads without `oi`/`p` are still accepted on restore.
+- Two flavours of that same v2 payload share the `#/restore/<payload>` route:
+  - DEVICE LINK TOKEN (`encodeLinkToken`, `h: []`): identity + `p` only,
+    ~225 bytes of payload / ~275 bytes of URL = QR version 12. This is what
+    the app renders on screen. Everything else reaches the joining device
+    through profile-doc sync.
+  - FULL BACKUP (`encodeBackup`): every handle as well. A five-inventory
+    profile is ~1.2 kB of URL = QR version 29 (133x133 modules), which a
+    camera cannot read off another phone's screen, and past ~11 inventories
+    it exceeds the QR byte limit entirely. It therefore travels as a LINK or
+    a saved PNG (decoded from clean pixels), never as an on-screen QR.
+  Decoders accept both: a link token is a payload with no handles. A payload
+  with neither handles nor `p` is rejected.
 
 ## Blob API (photos)
 
@@ -285,6 +297,20 @@ server changes.
   one and the local registry is pushed into it, so both devices converge on
   one list). Old payloads without `p` import statically as before, and the
   imported handles are merged into the importing device's own profile doc.
+- Joining semantics shown to the user (`RestorePage`): same profile docId =
+  "already linked", no-op; no local profile = plain join; DIFFERENT profile
+  docId = an explicit account switch that must be confirmed, described
+  honestly as a MERGE, because that is what the push above does — the local
+  inventories land in the joined account and appear on its devices. The old
+  account is simply forgotten by this device; nothing is tombstoned there.
+- Unlink (`unlinkDevice`, store/hooks.ts): leave the account and become a
+  fresh install. Stops the engine and clears the profile doc's local data,
+  then per inventory `closeDoc({clearData:true})` + clear upload queue +
+  `removeHandle`, then every `blob:`/`uploadq:` key, then
+  `resetProfileIdentity()` (drops `profileDoc`, per-doc aliases and owner
+  links; KEEPS `userName` and `ownerId` — same person, unlinked device) and
+  starts a brand new empty profile doc. Deliberately writes NO tombstones:
+  the other devices of the account keep everything.
 
 ## Owner identity (stable owner ids)
 
@@ -331,10 +357,13 @@ responds `{ suggestions: AiSuggestions }`. In-memory rate limit: 5 requests/min 
 The connector is a second CLIENT of the contracts above — the server knows
 nothing about it and needs no changes for it.
 
-- Onboarding: the user scans / uploads the profile QR or pastes the backup
-  link (`#/restore/<payload>`, payload v2 above). The URL's origin doubles as
-  the relay origin (`wss <origin>/sync`, `<origin>/api`). The `k` (AI key)
-  field of a backup payload is deliberately dropped by the extension.
+- Onboarding: the user pastes the FULL BACKUP link or uploads/scans its saved
+  QR image (`#/restore/<payload>`, payload v2 above). The extension does not
+  join the profile doc, so it needs the handles in the payload: the app's
+  on-screen DEVICE LINK QR is rejected with a message pointing at "Copy full
+  backup link". The URL's origin doubles as the relay origin
+  (`wss <origin>/sync`, `<origin>/api`). The `k` (AI key) field of a backup
+  payload is deliberately dropped by the extension.
 - Sync: per handle, a read-only Hocuspocus client of the OUTER doc — auth
   token JSON `{"t": "<roToken ?? rwToken>"}`, no create-handshake — that
   decrypts `enc:log` per "End-to-end encryption" and never appends to it.

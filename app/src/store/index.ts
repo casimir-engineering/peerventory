@@ -29,8 +29,10 @@ export {
 export { isP2pEnabled, setP2pEnabled, subscribeP2p } from './p2p';
 export {
   startProfileSync,
+  stopProfileSync,
   subscribeProfileStatus,
   getProfileStatus,
+  currentProfileDocId,
   adoptProfileHandle,
   profileRecordInventory,
 } from './profileSync';

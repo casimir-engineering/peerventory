@@ -146,6 +146,29 @@ export function updateProfileDocHandle(patch: Partial<ProfileDocHandle>): void {
   writeProfile({ profileDoc: { ...current, ...patch } });
 }
 
+/**
+ * Forget the profile-doc identity (unlink flow). The next
+ * ensureProfileDocHandle() mints a brand new, empty account. The user's name
+ * and ownerId are deliberately untouched: they are still the same person.
+ * Per-doc aliases and owner links go, because their docs go with them.
+ */
+export function resetProfileIdentity(): void {
+  const { userName, ownerId, lastCurrency } = readProfile();
+  try {
+    localStorage.setItem(
+      PROFILE_KEY,
+      JSON.stringify({
+        ...(userName ? { userName } : {}),
+        ...(ownerId ? { ownerId } : {}),
+        ...(lastCurrency ? { lastCurrency } : {}),
+      } satisfies Profile),
+    );
+  } catch {
+    // storage unavailable: profile is best-effort
+  }
+  notifyOwnerName();
+}
+
 export function linkedOwnerIdFor(docId: Id): string | null {
   const links = readProfile().ownerIdLinks;
   const id = links && typeof links === 'object' ? links[docId] : undefined;

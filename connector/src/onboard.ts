@@ -4,13 +4,13 @@
  * text and funnels through importProfileText().
  */
 
-import { buildProfile, parseProfileLink } from './backup';
+import { buildProfile, decodeHandles, parseProfileLink } from './backup';
 import { getCache, putCachedInventory, setProfile } from './storage';
 import type { Profile } from './types';
 
 export type ImportResult =
   | { ok: true; profile: Profile; withKeys: number }
-  | { ok: false; reason: 'not-a-link' | 'needs-origin' | 'bad-payload' };
+  | { ok: false; reason: 'not-a-link' | 'needs-origin' | 'bad-payload' | 'link-token' };
 
 export async function importProfileText(
   text: string,
@@ -19,6 +19,11 @@ export async function importProfileText(
   const parsed = parseProfileLink(text);
   if (!parsed) return { ok: false, reason: 'not-a-link' };
   if (!parsed.origin && !fallbackOrigin) return { ok: false, reason: 'needs-origin' };
+  // The app's on-screen QR is a device-link token: valid, but it carries no
+  // inventory tokens (the app gets those through profile-doc sync, which the
+  // extension deliberately does not join). Say so instead of "bad payload".
+  const decoded = decodeHandles(parsed.payload);
+  if (decoded && decoded.handles.length === 0) return { ok: false, reason: 'link-token' };
   const profile = buildProfile(text, fallbackOrigin);
   if (!profile) return { ok: false, reason: 'bad-payload' };
 
