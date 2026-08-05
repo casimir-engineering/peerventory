@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
 import { usePhotoUrl } from '../../store';
 import type { Id, PhotoRef, PhotoRole } from '../../types';
+import { CameraButton, CameraGlyph, cameraCaptureSupported } from './CameraCapture';
 import { useModalDismiss } from './Modal';
+import { TwoStepDeleteButton } from './TwoStepDelete';
 
 const ROLE_LABEL: Record<PhotoRole, string> = {
   photo: 'Photo',
@@ -371,6 +373,75 @@ export function PhotoPickerButton({
   );
 }
 
+/**
+ * The "+" tile. A phone gets the one button it always had (its file input is
+ * a camera chooser); a desktop browser gets the webcam next to the picker,
+ * because there the file input is only ever a file picker.
+ */
+export function PhotoAddTiles({
+  onAdd,
+  disabled,
+}: {
+  onAdd: (files: File[]) => void;
+  disabled?: boolean;
+}) {
+  const webcam = cameraCaptureSupported();
+  return (
+    <>
+      <CameraButton className="photo-add" onFiles={onAdd} disabled={disabled}>
+        <CameraGlyph />
+        <span>Take photo</span>
+      </CameraButton>
+      <PhotoPickerButton
+        onFiles={onAdd}
+        capture={!webcam}
+        multiple={webcam}
+        disabled={disabled}
+      >
+        <span className="glyph" aria-hidden="true">
+          +
+        </span>
+        <span>{webcam ? 'Upload' : 'Take photo'}</span>
+      </PhotoPickerButton>
+    </>
+  );
+}
+
+/** A role-specific add button, with the webcam attached to it on desktop. */
+export function PhotoAddSplit({
+  label,
+  role,
+  onFiles,
+  disabled,
+}: {
+  label: string;
+  role: PhotoRole;
+  onFiles: (files: File[]) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <span className="split-btn">
+      <PhotoPickerButton
+        className="btn sm split-main"
+        onFiles={onFiles}
+        capture={!cameraCaptureSupported()}
+        disabled={disabled}
+      >
+        {label}
+      </PhotoPickerButton>
+      <CameraButton
+        className="btn sm icon split-camera"
+        role={role}
+        onFiles={onFiles}
+        disabled={disabled}
+        ariaLabel={`${label} with the camera`}
+      >
+        <CameraGlyph />
+      </CameraButton>
+    </span>
+  );
+}
+
 export function PhotoGallery({
   docId,
   photos,
@@ -405,14 +476,13 @@ export function PhotoGallery({
               <span className="role-badge">{ROLE_LABEL[photo.role]}</span>
             ) : null}
             {!readonly ? (
-              <button
-                type="button"
+              <TwoStepDeleteButton
                 className="remove"
-                aria-label="Remove photo"
-                onClick={() => onRemove(photo.hash)}
+                label="Remove photo"
+                onDelete={() => onRemove(photo.hash)}
               >
                 ✕
-              </button>
+              </TwoStepDeleteButton>
             ) : null}
           </div>
         ))}
@@ -421,14 +491,7 @@ export function PhotoGallery({
           <PendingThumb key={photo.key} photo={photo} />
         ))}
 
-        {!readonly ? (
-          <PhotoPickerButton onFiles={(files) => onAdd(files, 'photo')} capture>
-            <span className="glyph" aria-hidden="true">
-              +
-            </span>
-            <span>Take photo</span>
-          </PhotoPickerButton>
-        ) : null}
+        {!readonly ? <PhotoAddTiles onAdd={(files) => onAdd(files, 'photo')} /> : null}
 
         {sorted.length === 0 && readonly ? (
           <div className="thumb-empty gallery-photo">No photos</div>
@@ -440,16 +503,16 @@ export function PhotoGallery({
           <PhotoPickerButton className="btn sm" onFiles={(files) => onAdd(files, 'photo')} multiple>
             Add from gallery
           </PhotoPickerButton>
-          <PhotoPickerButton
-            className="btn sm"
+          <PhotoAddSplit
+            label="Add serial label photo"
+            role="serial_label"
             onFiles={(files) => onAdd(files, 'serial_label')}
-            capture
-          >
-            Add serial label photo
-          </PhotoPickerButton>
-          <PhotoPickerButton className="btn sm" onFiles={(files) => onAdd(files, 'receipt')} capture>
-            Add receipt photo
-          </PhotoPickerButton>
+          />
+          <PhotoAddSplit
+            label="Add receipt photo"
+            role="receipt"
+            onFiles={(files) => onAdd(files, 'receipt')}
+          />
         </div>
       ) : null}
 

@@ -7,6 +7,7 @@ import { useState } from 'react';
 
 import { Field } from './Fields';
 import { Modal } from './Modal';
+import { TwoStepDeleteButton } from './TwoStepDelete';
 
 export function NameModal({
   welcome,
@@ -82,9 +83,15 @@ export function AiKeyModal({
       footer={
         <>
           {hasKey ? (
-            <button type="button" className="btn danger grow" onClick={() => onSave('')}>
+            <TwoStepDeleteButton
+              className="btn danger grow"
+              label="Remove key"
+              armedLabel="Tap again to remove the key"
+              armedChildren="Tap again to remove"
+              onDelete={() => onSave('')}
+            >
               Remove key
-            </button>
+            </TwoStepDeleteButton>
           ) : (
             <button type="button" className="btn grow" onClick={onClose}>
               Cancel

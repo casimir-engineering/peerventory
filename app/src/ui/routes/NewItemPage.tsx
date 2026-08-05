@@ -44,8 +44,9 @@ import type { AiFieldKey } from '../components/Fields';
 import { ConfirmModal, Modal } from '../components/Modal';
 import { SmartCombo } from '../components/SmartCombo';
 import { OcrScanner } from '../components/OcrScanner';
-import { PhotoPickerButton, ROLE_LABEL } from '../components/Photos';
+import { PhotoAddSplit, PhotoAddTiles, PhotoPickerButton, ROLE_LABEL } from '../components/Photos';
 import { useToast } from '../components/Toast';
+import { TwoStepDeleteButton } from '../components/TwoStepDelete';
 import { countryComboOptions } from '../lib/countries';
 import { formatCoords, parseTags } from '../lib/format';
 import { matchSerial } from '../lib/serial';
@@ -717,27 +718,20 @@ export function NewItemPage() {
                   {photo.role !== 'photo' ? (
                     <span className="role-badge">{ROLE_LABEL[photo.role]}</span>
                   ) : null}
-                  <button
-                    type="button"
+                  <TwoStepDeleteButton
                     className="remove"
-                    aria-label="Remove photo"
+                    label="Remove photo"
                     disabled={saving}
-                    onClick={() => removePhoto(photo.key)}
+                    onDelete={() => removePhoto(photo.key)}
                   >
                     ✕
-                  </button>
+                  </TwoStepDeleteButton>
                 </div>
               ))}
-              <PhotoPickerButton
-                onFiles={(files) => void addPhotos(files, 'photo')}
-                capture
+              <PhotoAddTiles
+                onAdd={(files) => void addPhotos(files, 'photo')}
                 disabled={saving}
-              >
-                <span className="glyph" aria-hidden="true">
-                  +
-                </span>
-                <span>Take photo</span>
-              </PhotoPickerButton>
+              />
             </div>
             <div className="row wrap">
               <PhotoPickerButton
@@ -748,22 +742,18 @@ export function NewItemPage() {
               >
                 Add from gallery
               </PhotoPickerButton>
-              <PhotoPickerButton
-                className="btn sm"
+              <PhotoAddSplit
+                label="Serial label"
+                role="serial_label"
                 onFiles={(files) => void addPhotos(files, 'serial_label')}
-                capture
                 disabled={saving}
-              >
-                Serial label
-              </PhotoPickerButton>
-              <PhotoPickerButton
-                className="btn sm"
+              />
+              <PhotoAddSplit
+                label="Receipt"
+                role="receipt"
                 onFiles={(files) => void addPhotos(files, 'receipt')}
-                capture
                 disabled={saving}
-              >
-                Receipt
-              </PhotoPickerButton>
+              />
             </div>
 
             {photos.length > 0 ? (
@@ -1082,13 +1072,15 @@ export function NewItemPage() {
                         {text}
                       </p>
                     ))}
-                    <button
-                      type="button"
+                    <TwoStepDeleteButton
                       className="btn sm"
-                      onClick={() => setTranslations(null)}
+                      label="Remove translations"
+                      armedLabel="Tap again to remove"
+                      armedChildren="Tap again to remove"
+                      onDelete={() => setTranslations(null)}
                     >
                       Remove translations
-                    </button>
+                    </TwoStepDeleteButton>
                   </div>
                 </Field>
               ) : null}

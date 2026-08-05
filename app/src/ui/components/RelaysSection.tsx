@@ -20,6 +20,7 @@ import {
 import type { SyncStatus } from '../../store/contract';
 import { Toggle } from './Fields';
 import { useToast } from './Toast';
+import { TwoStepDeleteButton } from './TwoStepDelete';
 
 type Health = 'checking' | 'ok' | 'unreachable';
 
@@ -103,17 +104,17 @@ export function RelaysSection() {
               {relay.enabled ? 'Disable' : 'Enable'}
             </button>
             {relay.url !== defaultOrigin ? (
-              <button
-                type="button"
+              <TwoStepDeleteButton
                 className="btn ghost icon sm"
-                aria-label={`Remove relay ${relay.url}`}
-                onClick={() => {
+                label={`Remove relay ${relay.url}`}
+                armedLabel="Tap again to remove this relay"
+                onDelete={() => {
                   removeRelay(relay.url);
                   toast('Relay removed from this device');
                 }}
               >
                 ✕
-              </button>
+              </TwoStepDeleteButton>
             ) : null}
           </div>
         );

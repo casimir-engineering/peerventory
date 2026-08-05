@@ -872,6 +872,120 @@ hr {
   color: var(--accent);
 }
 
+.photo-add .camera-glyph {
+  width: 26px;
+  height: 26px;
+  color: var(--accent);
+}
+
+/* A picker and its camera companion read as one control. */
+.split-btn {
+  display: inline-flex;
+}
+
+.split-btn .split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.split-btn .split-camera {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.camera-glyph {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+/* ------------------------------------------------------ camera capture */
+
+.camera-view {
+  position: relative;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4 / 3;
+}
+
+.camera-view video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.camera-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.camera-shutter {
+  touch-action: manipulation;
+}
+
+/* --------------------------------------------------- two-step deletion */
+
+/*
+ * Anything that deletes without a confirm dialog arms first: one pulse, a red
+ * state that lasts a couple of seconds, and only then does a second tap
+ * delete. touch-action keeps the double tap from zooming the page instead.
+ */
+.two-step {
+  touch-action: manipulation;
+}
+
+.two-step.armed {
+  animation: two-step-arm 200ms ease-out;
+}
+
+.btn.two-step.armed,
+.btn.danger.two-step.armed {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #1a0b09;
+  font-weight: 650;
+}
+
+.btn.two-step.armed:hover:not(:disabled) {
+  background: var(--danger);
+}
+
+.gallery-item .remove.two-step.armed {
+  background: var(--danger);
+  color: #1a0b09;
+  font-weight: 700;
+  box-shadow: 0 0 0 2px rgba(239, 95, 82, 0.45);
+}
+
+@keyframes two-step-arm {
+  0% {
+    transform: scale(1);
+  }
+  45% {
+    transform: scale(1.22);
+  }
+  75% {
+    transform: scale(0.94);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .two-step.armed {
+    animation: none;
+  }
+}
+
 /* ---------------------------------------------------------------- tables */
 
 .table-wrap {

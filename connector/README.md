@@ -215,6 +215,8 @@ connector/
                                 sell flows, pending autofill, guards
     app-sell-modal.mjs          Chromium, against a dev app: Sell modal + payload
     app-photo-latency.mjs       Chromium, against a dev app: photo capture latency
+    app-delete-camera.mjs       Chromium, against a dev app: webcam capture modal,
+                                two-step delete arming
     fixture-anibis.html / fixture-facebook.jsx / sample-payload.json
 ```
 
@@ -251,6 +253,12 @@ npm test          # unit + relay integration + Chromium e2e
   tile (the object URL is pre-warmed by `addPhoto`), the stored form is still
   a 2048px JPEG — EXIF-rotated captures included — and that the pipeline still
   works with `OffscreenCanvas` removed.
+
+- `test/app-delete-camera.mjs` — drives the *app* the same way, with Chromium's
+  fake camera device: the webcam capture modal opens, takes several shots and
+  hands them to the normal photo path, and the two-step delete button arms on
+  the first click (red, animated, `touch-action: manipulation`, nothing
+  deleted), lapses on its own, and deletes only on a second click while armed.
 
 **Verified live** (2026-08): on logged-in anibis.ch — category auto-pick on
 the real MUI menu (heuristic and AI), field fill, automatic photo upload,
