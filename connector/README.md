@@ -213,6 +213,8 @@ connector/
     integration-relay.mjs       Node: real server/ relay + the shipped syncInventory
     run-tests.mjs               Chromium e2e: onboarding (QR drop + link), search,
                                 sell flows, pending autofill, guards
+    app-sell-modal.mjs          Chromium, against a dev app: Sell modal + payload
+    app-photo-latency.mjs       Chromium, against a dev app: photo capture latency
     fixture-anibis.html / fixture-facebook.jsx / sample-payload.json
 ```
 
@@ -241,6 +243,14 @@ npm test          # unit + relay integration + Chromium e2e
   the app-payload paste path, the wrong-page guard, the listing-language
   templates, and the AI-assisted fill (api.anthropic.com is host-mapped to a
   local mock — the real popup/background fetch paths run, no real API call).
+
+- `test/app-photo-latency.mjs` — drives the *app* (a dev server on :5203, for
+  the `window.__store` hook): pushes a synthetic 12MP capture into the item
+  sheet's file input and asserts the optimistic preview is on screen within
+  300ms, that the stored photo replaces it without ever showing a "Loading"
+  tile (the object URL is pre-warmed by `addPhoto`), the stored form is still
+  a 2048px JPEG — EXIF-rotated captures included — and that the pipeline still
+  works with `OffscreenCanvas` removed.
 
 **Verified live** (2026-08): on logged-in anibis.ch — category auto-pick on
 the real MUI menu (heuristic and AI), field fill, automatic photo upload,

@@ -35,6 +35,28 @@ export function PhotoImage({
   return <img className={className} src={url} alt={alt} loading="lazy" onClick={onClick} />;
 }
 
+/**
+ * A capture that is on its way into the store, shown from the raw file the
+ * moment it arrives (the browser scales it for display on the GPU, so there
+ * is nothing to wait for) and replaced by the stored photo when the pipeline
+ * finishes.
+ */
+export interface PendingPhotoPreview {
+  key: string;
+  url: string;
+  role: PhotoRole;
+}
+
+function PendingThumb({ photo }: { photo: PendingPhotoPreview }) {
+  return (
+    <div className="gallery-item pending">
+      <img className="gallery-photo" src={photo.url} alt="Photo being saved" />
+      <span className="pending-spinner" aria-label="Saving photo" />
+      {photo.role !== 'photo' ? <span className="role-badge">{ROLE_LABEL[photo.role]}</span> : null}
+    </div>
+  );
+}
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 const DOUBLE_TAP_SCALE = 2.5;
@@ -352,15 +374,15 @@ export function PhotoPickerButton({
 export function PhotoGallery({
   docId,
   photos,
+  pending = [],
   readonly,
-  busy,
   onAdd,
   onRemove,
 }: {
   docId: Id;
   photos: PhotoRef[];
+  pending?: PendingPhotoPreview[];
   readonly: boolean;
-  busy?: boolean;
   onAdd: (files: File[], role: PhotoRole) => void;
   onRemove: (hash: string) => void;
 }) {
@@ -395,12 +417,16 @@ export function PhotoGallery({
           </div>
         ))}
 
+        {pending.map((photo) => (
+          <PendingThumb key={photo.key} photo={photo} />
+        ))}
+
         {!readonly ? (
-          <PhotoPickerButton onFiles={(files) => onAdd(files, 'photo')} capture disabled={busy}>
+          <PhotoPickerButton onFiles={(files) => onAdd(files, 'photo')} capture>
             <span className="glyph" aria-hidden="true">
               +
             </span>
-            <span>{busy ? 'Saving' : 'Take photo'}</span>
+            <span>Take photo</span>
           </PhotoPickerButton>
         ) : null}
 
@@ -411,28 +437,17 @@ export function PhotoGallery({
 
       {!readonly ? (
         <div className="row wrap">
-          <PhotoPickerButton
-            className="btn sm"
-            onFiles={(files) => onAdd(files, 'photo')}
-            multiple
-            disabled={busy}
-          >
+          <PhotoPickerButton className="btn sm" onFiles={(files) => onAdd(files, 'photo')} multiple>
             Add from gallery
           </PhotoPickerButton>
           <PhotoPickerButton
             className="btn sm"
             onFiles={(files) => onAdd(files, 'serial_label')}
             capture
-            disabled={busy}
           >
             Add serial label photo
           </PhotoPickerButton>
-          <PhotoPickerButton
-            className="btn sm"
-            onFiles={(files) => onAdd(files, 'receipt')}
-            capture
-            disabled={busy}
-          >
+          <PhotoPickerButton className="btn sm" onFiles={(files) => onAdd(files, 'receipt')} capture>
             Add receipt photo
           </PhotoPickerButton>
         </div>

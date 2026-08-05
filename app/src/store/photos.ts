@@ -17,6 +17,7 @@ import type { Id, PhotoRef, PhotoRole } from '../types';
 import { decryptPhoto, encryptPhoto, importContentKey, type DocKey } from './crypto';
 import { openDoc } from './docs';
 import { sha256Hex } from './ids';
+import { logPhotoTiming, normalizeImage } from './imagePipeline';
 import { getHandlesSnapshot, getStoredHandle } from './registry';
 import { relayHttpUrl, relayOriginsForDoc } from './relays';
 
@@ -38,8 +39,6 @@ function docKeyFor(docId: Id): Promise<DocKey> | null {
   return cached;
 }
 
-const MAX_EDGE = 2048;
-const JPEG_QUALITY = 0.85;
 const blobKey = (hash: string) => 'blob:' + hash;
 const queueKey = (docId: Id) => 'uploadq:' + docId;
 
@@ -50,41 +49,6 @@ interface QueueEntry {
   up?: string[];
 }
 
-/* ---------- image normalization ---------- */
-
-async function normalizeImage(blob: Blob): Promise<{ bytes: Blob; mime: string }> {
-  let bmp: ImageBitmap;
-  try {
-    bmp = await createImageBitmap(blob);
-  } catch {
-    // Not decodable client-side; store as-is.
-    return { bytes: blob, mime: blob.type || 'application/octet-stream' };
-  }
-  try {
-    const maxEdge = Math.max(bmp.width, bmp.height);
-    const alreadyCompact =
-      maxEdge <= MAX_EDGE && (blob.type === 'image/jpeg' || blob.type === 'image/webp');
-    if (alreadyCompact) return { bytes: blob, mime: blob.type };
-
-    const scale = Math.min(1, MAX_EDGE / maxEdge);
-    const w = Math.max(1, Math.round(bmp.width * scale));
-    const h = Math.max(1, Math.round(bmp.height * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return { bytes: blob, mime: blob.type || 'application/octet-stream' };
-    ctx.drawImage(bmp, 0, 0, w, h);
-    const out = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', JPEG_QUALITY),
-    );
-    if (!out) return { bytes: blob, mime: blob.type || 'application/octet-stream' };
-    return { bytes: out, mime: 'image/jpeg' };
-  } finally {
-    bmp.close();
-  }
-}
-
 /* ---------- add / get ---------- */
 
 export async function addPhoto(
@@ -93,6 +57,9 @@ export async function addPhoto(
   blob: Blob,
   role: PhotoRole = 'photo',
 ): Promise<PhotoRef> {
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+  // Downscaling and re-encoding happens in a worker when the browser has one
+  // (see imagePipeline.ts); the UI shows the raw capture meanwhile.
   const { bytes, mime } = await normalizeImage(blob);
 
   // Blobs are addressed by the hash of the CIPHERTEXT (the server only ever
@@ -106,6 +73,9 @@ export async function addPhoto(
   const wire = await encryptPhoto(key, new Uint8Array(await bytes.arrayBuffer()), mime);
   const hash = await sha256Hex(wire.slice().buffer as ArrayBuffer);
   await idbSet(blobKey(hash), bytes);
+  // Publish the URL before the doc ref, so the gallery renders this photo
+  // straight from memory instead of reading it back out of IndexedDB.
+  prewarmUrl(hash, bytes);
 
   const ref: PhotoRef = { hash, mime, role, addedAt: Date.now() };
   const entry = openDoc(docId);
@@ -128,6 +98,7 @@ export async function addPhoto(
   }
 
   void enqueueUpload(docId, hash, mime);
+  logPhotoTiming('stored', startedAt, `${Math.round(bytes.size / 1024)}KB ${hash.slice(0, 8)}`);
   return ref;
 }
 
@@ -379,6 +350,26 @@ async function acquireUrl(docId: Id, hash: string): Promise<string | null> {
   return url;
 }
 
+/** Cached URL without taking a reference; for a first render only. */
+function peekUrl(hash: string): string | null {
+  return urlCache.get(hash)?.url ?? null;
+}
+
+/** How long a pre-warmed URL is held before it needs a real consumer. */
+const PREWARM_MS = 60_000;
+
+/**
+ * Cache the object URL of a blob that was just written, so the component that
+ * is about to render it resolves from memory. The pre-warm holds one ref and
+ * drops it later: by then whoever displays the photo holds its own, and an
+ * unused entry is revoked instead of leaking.
+ */
+function prewarmUrl(hash: string, blob: Blob): void {
+  if (typeof URL === 'undefined' || urlCache.has(hash)) return;
+  urlCache.set(hash, { url: URL.createObjectURL(blob), refs: 1 });
+  setTimeout(() => releaseUrl(hash), PREWARM_MS);
+}
+
 function releaseUrl(hash: string): void {
   const cached = urlCache.get(hash);
   if (!cached) return;
@@ -394,7 +385,9 @@ function releaseUrl(hash: string): void {
  * background download from the blob server when the blob is not cached.
  */
 export function usePhotoUrl(docId: Id, hash: string | null): string | null {
-  const [url, setUrl] = useState<string | null>(null);
+  // A photo added on this device is pre-warmed into the cache by addPhoto, so
+  // it can be painted on the very first render instead of a "Loading" tile.
+  const [url, setUrl] = useState<string | null>(() => (hash ? peekUrl(hash) : null));
 
   useEffect(() => {
     if (!hash) {

@@ -771,6 +771,37 @@ hr {
   cursor: pointer;
 }
 
+/* A capture shown from the raw file while the store is still writing it. */
+.gallery-item.pending img {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.gallery-item .pending-spinner {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: pending-spin 0.8s linear infinite;
+}
+
+@keyframes pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gallery-item .pending-spinner {
+    animation-duration: 2.4s;
+  }
+}
+
 .gallery-item .role-badge {
   position: absolute;
   left: 4px;

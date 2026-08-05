@@ -12,6 +12,7 @@ export {
 } from './hooks';
 export type { MoveItemResult } from './hooks';
 export { usePhotoUrl, getPhotoBlob } from './photos';
+export { normalizeImage } from './imagePipeline';
 export { newId, newToken } from './ids';
 export { getDeviceId } from './device';
 export { ownerDisplayName } from './owners';

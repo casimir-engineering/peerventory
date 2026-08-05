@@ -5,6 +5,7 @@
  * any failure (the UI shows err.message directly).
  */
 
+import { normalizeImage } from '../store';
 import { getAiKey } from './aikey';
 
 export interface AiSuggestions {
@@ -37,24 +38,9 @@ const AI_JPEG_QUALITY = 0.75;
 
 async function shrinkForAi(blob: Blob): Promise<Blob> {
   try {
-    const bmp = await createImageBitmap(blob);
-    try {
-      const maxEdge = Math.max(bmp.width, bmp.height);
-      if (maxEdge <= AI_MAX_EDGE && blob.type === 'image/jpeg') return blob;
-      const scale = Math.min(1, AI_MAX_EDGE / maxEdge);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(bmp.width * scale));
-      canvas.height = Math.max(1, Math.round(bmp.height * scale));
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return blob;
-      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-      const out = await new Promise<Blob | null>((resolve) =>
-        canvas.toBlob(resolve, 'image/jpeg', AI_JPEG_QUALITY),
-      );
-      return out ?? blob;
-    } finally {
-      bmp.close();
-    }
+    // Same worker pipeline the photo store uses, at a smaller target.
+    const { bytes } = await normalizeImage(blob, AI_MAX_EDGE, AI_JPEG_QUALITY);
+    return bytes;
   } catch {
     return blob; // not decodable here; Anthropic will reject it if unusable
   }

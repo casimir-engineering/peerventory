@@ -109,7 +109,6 @@ export function NewItemPage() {
   const metaCurrency = inv.meta?.currency ?? 'USD';
 
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
-  const [photoBusy, setPhotoBusy] = useState(false);
   const [description, setDescription] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [currency, setCurrency] = useState(() => getLastCurrency() ?? metaCurrency);
@@ -329,24 +328,31 @@ export function NewItemPage() {
     return out.map((name) => ({ value: name, label: name }));
   }, [items]);
 
-  const addPhotos = async (files: File[], role: PhotoRole) => {
-    setPhotoBusy(true);
-    try {
-      const added: PendingPhoto[] = [];
-      for (const file of files) {
-        const blob = await downscaleImage(file);
-        added.push({
-          key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          blob,
-          url: URL.createObjectURL(blob),
-          role,
-        });
-      }
-      setPhotos((prev) => [...prev, ...added]);
-    } catch {
-      toastError('That photo could not be read');
-    } finally {
-      setPhotoBusy(false);
+  /**
+   * The raw capture is shown immediately — decoding it for display is the
+   * browser's problem, and it is much better at it than we are. The downscale
+   * runs behind that, and only swaps the blob the save will store.
+   */
+  const addPhotos = (files: File[], role: PhotoRole) => {
+    const added: PendingPhoto[] = files.map((file, index) => ({
+      key: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      blob: file,
+      url: URL.createObjectURL(file),
+      role,
+    }));
+    setPhotos((prev) => [...prev, ...added]);
+
+    for (const photo of added) {
+      void downscaleImage(photo.blob)
+        .then((blob) => {
+          // The preview keeps pointing at the raw capture (already painted,
+          // and revoking it under a live <img> buys nothing); only the bytes
+          // the save will store are swapped.
+          if (blob !== photo.blob) {
+            setPhotos((prev) => prev.map((p) => (p.key === photo.key ? { ...p, blob } : p)));
+          }
+        })
+        .catch(() => toastError('That photo could not be read'));
     }
   };
 
@@ -725,12 +731,12 @@ export function NewItemPage() {
               <PhotoPickerButton
                 onFiles={(files) => void addPhotos(files, 'photo')}
                 capture
-                disabled={photoBusy || saving}
+                disabled={saving}
               >
                 <span className="glyph" aria-hidden="true">
                   +
                 </span>
-                <span>{photoBusy ? 'Working' : 'Take photo'}</span>
+                <span>Take photo</span>
               </PhotoPickerButton>
             </div>
             <div className="row wrap">
@@ -738,7 +744,7 @@ export function NewItemPage() {
                 className="btn sm"
                 onFiles={(files) => void addPhotos(files, 'photo')}
                 multiple
-                disabled={photoBusy || saving}
+                disabled={saving}
               >
                 Add from gallery
               </PhotoPickerButton>
@@ -746,7 +752,7 @@ export function NewItemPage() {
                 className="btn sm"
                 onFiles={(files) => void addPhotos(files, 'serial_label')}
                 capture
-                disabled={photoBusy || saving}
+                disabled={saving}
               >
                 Serial label
               </PhotoPickerButton>
@@ -754,7 +760,7 @@ export function NewItemPage() {
                 className="btn sm"
                 onFiles={(files) => void addPhotos(files, 'receipt')}
                 capture
-                disabled={photoBusy || saving}
+                disabled={saving}
               >
                 Receipt
               </PhotoPickerButton>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   analyzeItemPhotos,
@@ -42,7 +42,7 @@ import { ConfirmModal, Modal } from '../components/Modal';
 import { MoveItemModal } from '../components/MoveItemModal';
 import { SmartCombo } from '../components/SmartCombo';
 import { OcrScanner } from '../components/OcrScanner';
-import { PhotoGallery } from '../components/Photos';
+import { PhotoGallery, type PendingPhotoPreview } from '../components/Photos';
 import { SellModal } from '../components/SellModal';
 import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
@@ -50,7 +50,6 @@ import { countryComboOptions } from '../lib/countries';
 import { formatDateTime, locationText, parseTags, sizeLabel, weightLabel } from '../lib/format';
 import { matchSerial } from '../lib/serial';
 import { getLocationWithPlace } from '../lib/geo';
-import { downscaleImage } from '../lib/image';
 import '../entry.css';
 
 /** Recent entries for this key first, then whatever the inventory already holds. */
@@ -80,7 +79,16 @@ export function ItemSheetPage() {
   const [moving, setMoving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
-  const [photoBusy, setPhotoBusy] = useState(false);
+  const [pendingPhotos, setPendingPhotos] = useState<PendingPhotoPreview[]>([]);
+  const pendingPhotosRef = useRef<PendingPhotoPreview[]>([]);
+  pendingPhotosRef.current = pendingPhotos;
+  // Leaving the sheet mid-save must not leak the preview URLs.
+  useEffect(
+    () => () => {
+      for (const photo of pendingPhotosRef.current) URL.revokeObjectURL(photo.url);
+    },
+    [],
+  );
   const [locationDraft, setLocationDraft] = useState('');
   const [locationPick, setLocationPick] = useState<{ lat: number; lon: number } | null>(null);
   const [ownerDraft, setOwnerDraft] = useState('');
@@ -228,18 +236,32 @@ export function ItemSheetPage() {
     toast('Location updated');
   };
 
-  const addPhotos = async (files: File[], role: PhotoRole) => {
-    setPhotoBusy(true);
-    try {
-      for (const file of files) {
-        const blob = await downscaleImage(file);
-        await inv.addPhoto(sheet.id, blob, role);
+  /**
+   * The capture is on screen in the same tick the file arrives, straight from
+   * the raw blob; downscaling, encrypting and storing it runs behind that
+   * tile, which is swapped for the stored photo when it lands.
+   */
+  const addPhotos = (files: File[], role: PhotoRole) => {
+    const queued = files.map((file, index) => ({
+      key: `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+      url: URL.createObjectURL(file),
+      role,
+      file,
+    }));
+    setPendingPhotos((prev) => [...prev, ...queued.map(({ file: _f, ...preview }) => preview)]);
+
+    void (async () => {
+      for (const entry of queued) {
+        try {
+          await inv.addPhoto(sheet.id, entry.file, role);
+        } catch (err) {
+          toastError(err instanceof Error ? err.message : 'Photo could not be saved');
+        } finally {
+          setPendingPhotos((prev) => prev.filter((p) => p.key !== entry.key));
+          URL.revokeObjectURL(entry.url);
+        }
       }
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Photo could not be saved');
-    } finally {
-      setPhotoBusy(false);
-    }
+    })();
   };
 
   const runAutofill = async () => {
@@ -381,9 +403,9 @@ export function ItemSheetPage() {
             <PhotoGallery
               docId={docId}
               photos={sheet.photos ?? []}
+              pending={pendingPhotos}
               readonly={readonly}
-              busy={photoBusy}
-              onAdd={(files, role) => void addPhotos(files, role)}
+              onAdd={addPhotos}
               onRemove={(hash) => inv.removePhoto(sheet.id, hash)}
             />
             {!readonly && hasPhotos ? (

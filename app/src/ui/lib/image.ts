@@ -1,39 +1,17 @@
 /**
- * Camera photos off a modern phone are 4000px+ / several MB. The blob contract
- * hashes the *final* bytes (max 2048px), so images are downscaled here before
- * they ever reach the store. Safe to drop if the store downscales internally.
+ * UI-side image helpers. The downscale itself lives in the store's image
+ * pipeline (worker + hardware decode), so a photo prepared here is byte for
+ * byte what addPhoto would have stored anyway.
  */
+import { normalizeImage } from '../../store';
+import { context2d, canvasToBlob, decodeScaled } from '../../store/imageCodec';
 
 const MAX_EDGE = 2048;
-const QUALITY = 0.85;
 
 export async function downscaleImage(file: Blob, maxEdge = MAX_EDGE): Promise<Blob> {
   try {
-    const bitmap = await loadBitmap(file);
-    const { width, height } = bitmap;
-    const scale = Math.min(1, maxEdge / Math.max(width, height));
-    if (scale >= 1 && file.size < 1_500_000) {
-      closeBitmap(bitmap);
-      return file;
-    }
-    const targetW = Math.max(1, Math.round(width * scale));
-    const targetH = Math.max(1, Math.round(height * scale));
-
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      closeBitmap(bitmap);
-      return file;
-    }
-    ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-    closeBitmap(bitmap);
-
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', QUALITY);
-    });
-    return blob ?? file;
+    const { bytes } = await normalizeImage(file, maxEdge);
+    return bytes;
   } catch {
     return file;
   }
@@ -59,54 +37,29 @@ export async function makeExportThumb(
   maxEdge = THUMB_MAX_EDGE,
 ): Promise<ExportThumb | null> {
   try {
-    const bitmap = await loadBitmap(file);
-    const { width, height } = bitmap;
-    const scale = Math.min(1, maxEdge / Math.max(width, height));
-    const targetW = Math.max(1, Math.round(width * scale));
-    const targetH = Math.max(1, Math.round(height * scale));
+    const bitmap = await decodeScaled(file, maxEdge);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const targetW = Math.max(1, Math.round(bitmap.width * scale));
+    const targetH = Math.max(1, Math.round(bitmap.height * scale));
 
     const canvas = document.createElement('canvas');
     canvas.width = targetW;
     canvas.height = targetH;
-    const ctx = canvas.getContext('2d');
+    const ctx = context2d(canvas);
     if (!ctx) {
-      closeBitmap(bitmap);
+      bitmap.close();
       return null;
     }
     // JPEG has no alpha; keep transparent PNG edges white instead of black.
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, targetW, targetH);
     ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-    closeBitmap(bitmap);
+    bitmap.close();
 
-    const blob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob(resolve, 'image/jpeg', THUMB_QUALITY);
-    });
+    const blob = await canvasToBlob(canvas, 'image/jpeg', THUMB_QUALITY);
     if (!blob) return null;
     return { data: await blob.arrayBuffer(), width: targetW, height: targetH };
   } catch {
     return null;
   }
-}
-
-async function loadBitmap(file: Blob): Promise<ImageBitmap | HTMLImageElement> {
-  if (typeof createImageBitmap === 'function') {
-    return createImageBitmap(file);
-  }
-  const url = URL.createObjectURL(file);
-  try {
-    return await new Promise<HTMLImageElement>((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('decode failed'));
-      img.src = url;
-    });
-  } finally {
-    // The bitmap is already decoded into the element by the time it loads.
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
-}
-
-function closeBitmap(bitmap: ImageBitmap | HTMLImageElement): void {
-  if ('close' in bitmap && typeof bitmap.close === 'function') bitmap.close();
 }
