@@ -15,7 +15,6 @@ import {
 } from '../components/Fields';
 import { SmartCombo } from '../components/SmartCombo';
 import { ConfirmModal } from '../components/Modal';
-import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
 
 export function SettingsPage() {
@@ -25,7 +24,6 @@ export function SettingsPage() {
   const inv: UseInventoryResult = useInventory(docId || null);
   const { forgetInventory }: UseInventoriesResult = useInventories();
 
-  const [sharing, setSharing] = useState(false);
   const [confirmForget, setConfirmForget] = useState(false);
   const [deleteBox, setDeleteBox] = useState<Box | null>(null);
   const [newBoxLabel, setNewBoxLabel] = useState('');
@@ -232,44 +230,11 @@ export function SettingsPage() {
           </section>
 
           <section className="card stack tight">
-            <SectionTitle>Encryption</SectionTitle>
-            <p className="small">End-to-end encrypted</p>
-            <p className="tiny faint">
-              Items and photos are encrypted on this device before they reach the sync server.
-              The server, and anyone who can read its disk, only stores ciphertext. The
-              decryption key travels inside share links and backups only.
-            </p>
-          </section>
-
-          <section className="card stack tight">
-            <SectionTitle>Share</SectionTitle>
-            <p className="small muted">
-              A view-only link lets a forwarder or a customs desk read and export this inventory
-              without being able to change it.
-            </p>
-            <button type="button" className="btn primary" onClick={() => setSharing(true)}>
-              Show share link and QR code
-            </button>
-            {readonly ? (
-              <p className="tiny faint">
-                This device joined with a view-only token, so only view-only links can be created
-                from here.
-              </p>
-            ) : null}
-          </section>
-
-          <section className="card stack tight">
-            <SectionTitle>Stats</SectionTitle>
-            <p className="small muted">
-              Review value, weight, volume, box, and category totals for this inventory.
-            </p>
-            <Link className="btn" to={`/inv/${docId}/stats`}>
-              View inventory stats
-            </Link>
-          </section>
-
-          <section className="card stack tight">
             <SectionTitle>Export</SectionTitle>
+            <p className="small muted">
+              Sharing and stats live on the inventory screen; exports produce files for customs,
+              forwarders, or archiving.
+            </p>
             <ExportButtons docId={docId} inventoryName={meta.name} />
           </section>
 
@@ -325,16 +290,25 @@ export function SettingsPage() {
                 </button>
                 <p className="tiny faint">
                   Pushes this inventory (and its photos) to every relay enabled on this device, so
-                  it stays available if one relay disappears. Manage relays on the Inventories page.
+                  it stays available if one relay disappears. Manage relays under Account &amp;
+                  sync ({'\u2699\uFE0E'} on the home screen).
                 </p>
               </>
             ) : null}
+            <p className="small" style={{ marginTop: 4 }}>
+              End-to-end encrypted
+            </p>
+            <p className="tiny faint">
+              Items and photos are encrypted on this device before they reach any relay. The
+              relays, and anyone who can read their disks, only store ciphertext. The decryption
+              key travels inside share links and backups only.
+            </p>
           </section>
 
           <section className="card stack tight">
             <SectionTitle>This device</SectionTitle>
             <button type="button" className="btn danger" onClick={() => setConfirmForget(true)}>
-              Forget this inventory
+              Forget this inventory…
             </button>
             <p className="tiny faint">
               Removes the local copy and the stored tokens from this device only. Other devices keep
@@ -343,15 +317,6 @@ export function SettingsPage() {
           </section>
         </div>
       </main>
-
-      {sharing ? (
-        <ShareModal
-          docId={docId}
-          target={{ kind: 'inventory' }}
-          title="Share inventory"
-          onClose={() => setSharing(false)}
-        />
-      ) : null}
 
       {deleteBox ? (
         <ConfirmModal

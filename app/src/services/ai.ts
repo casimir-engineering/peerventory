@@ -143,7 +143,7 @@ async function upstreamErrorMessage(res: Response): Promise<string> {
   } catch {
     // non-JSON error body
   }
-  if (res.status === 401) return 'Invalid Claude API key. Check it in your profile.';
+  if (res.status === 401) return 'Invalid Claude API key. Check it under Account & sync.';
   if (res.status === 403) return 'Anthropic does not serve this network region. Try a VPN.';
   if (res.status === 429) return 'AI rate limited, wait a minute.';
   if (type === 'invalid_request_error' && /credit/i.test(message)) {
@@ -162,7 +162,7 @@ export async function analyzeItemPhotos(
   if (photos.length > MAX_PHOTOS) throw new Error(`Select at most ${MAX_PHOTOS} photos`);
   const apiKey = getAiKey();
   if (!apiKey) {
-    throw new Error('No Claude API key on this device. Add yours in your profile, or scan a key QR.');
+    throw new Error('No Claude API key on this device. Add yours under Account & sync, or scan a key QR.');
   }
 
   const encoded = await Promise.all(

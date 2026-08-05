@@ -187,8 +187,8 @@ export function SellModal({
           </button>
         ) : (
           <p className="tiny faint">
-            Add a Claude API key in your profile to get AI-written selling copy and FR/DE
-            translations.
+            Add a Claude API key under Account &amp; sync ({'\u2699\uFE0E'} on the home screen) to
+            get AI-written selling copy and FR/DE translations.
           </p>
         )}
 

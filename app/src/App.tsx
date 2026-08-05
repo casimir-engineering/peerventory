@@ -5,6 +5,7 @@ import { startProfileSync } from './store';
 import './index.css';
 import './ui/app2.css';
 import { ToastProvider } from './ui/components/Toast';
+import { AccountPage } from './ui/routes/AccountPage';
 import { InventoriesPage } from './ui/routes/InventoriesPage';
 import { InventoryHomePage } from './ui/routes/InventoryHomePage';
 import { ItemSheetPage } from './ui/routes/ItemSheetPage';
@@ -34,6 +35,7 @@ export default function App() {
         <div className="app">
           <Routes>
             <Route path="/" element={<InventoriesPage />} />
+            <Route path="/account" element={<AccountPage />} />
 
             <Route path="/join/:docId/:token" element={<JoinPage />} />
             <Route path="/join/:docId/:token/i/:itemId" element={<JoinPage />} />

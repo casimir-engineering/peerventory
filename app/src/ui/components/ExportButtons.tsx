@@ -62,25 +62,27 @@ export function ExportButtons({
     }
   };
 
-  const xlsxLabel = itemIds ? `XLSX (${selectionLabel ?? `${itemIds.length} items`})` : 'XLSX';
+  const xlsxLabel = itemIds
+    ? `Spreadsheet (${selectionLabel ?? `${itemIds.length} items`})`
+    : 'Spreadsheet (.xlsx)';
 
   return (
     <div className="stack tight">
       <div className="row wrap">
-        <button type="button" className="btn" disabled={busy !== null} onClick={() => run('yaml')}>
-          {busy === 'yaml' ? <Spinner /> : null} YAML
-        </button>
         <button type="button" className="btn" disabled={busy !== null} onClick={() => run('xlsx')}>
           {busy === 'xlsx' ? <Spinner /> : null} {xlsxLabel}
         </button>
         <button type="button" className="btn" disabled={busy !== null} onClick={() => run('zip')}>
-          {busy === 'zip' ? <Spinner /> : null} Full archive ZIP
+          {busy === 'zip' ? <Spinner /> : null} Archive with photos (.zip)
+        </button>
+        <button type="button" className="btn" disabled={busy !== null} onClick={() => run('yaml')}>
+          {busy === 'yaml' ? <Spinner /> : null} Data only (.yaml)
         </button>
       </div>
       <p className="tiny faint">
         {itemIds
-          ? 'The spreadsheet covers this list only. YAML and the archive always contain the whole inventory.'
-          : 'The archive bundles the spreadsheet, the YAML manifest and every photo.'}
+          ? 'The spreadsheet covers this list only. The YAML file and the archive always contain the whole inventory.'
+          : 'The archive bundles the spreadsheet, the YAML data file and every photo.'}
       </p>
     </div>
   );

@@ -1,56 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import QRCode from 'qrcode';
 import * as services from '../../services';
-import {
-  getDeviceId,
-  getProfileStatus,
-  rememberRelayHint,
-  snapshotInventory,
-  subscribeProfileStatus,
-  useInventories,
-} from '../../store';
+import { getDeviceId, snapshotInventory, useInventories } from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
 import type { Id, InventoryHandle, InventorySnapshot, Item } from '../../types';
 import { formatAmount, formatMoney } from '../lib/format';
 import { AppHeader } from '../components/AppHeader';
-import { EmptyState, SectionTitle, Spinner } from '../components/Common';
+import { NameModal } from '../components/AccountModals';
+import { EmptyState, SectionTitle } from '../components/Common';
 import { PhotoImage } from '../components/Photos';
 import { Field, Toggle, useCurrencyComboOptions } from '../components/Fields';
 import { SmartCombo } from '../components/SmartCombo';
-import { AccountRestoreModal } from '../components/AccountRestoreModal';
-import { ImportModal } from '../components/ImportModal';
-import { ConfirmModal, Modal } from '../components/Modal';
-import { QrCanvas } from '../components/QrCanvas';
+import { useImportFlow } from '../components/ImportFlow';
+import { Modal } from '../components/Modal';
 import { QrScanner } from '../components/QrScanner';
-import { RelaysSection } from '../components/RelaysSection';
 import { useToast } from '../components/Toast';
-import { buildAccountBackup } from '../lib/accountBackup';
-import { buildBackupUrl, copyToClipboard, joinRoute, parseShareLink } from '../lib/links';
-import type { ParsedAccount, ParsedImport } from '../lib/importFile';
-import { parseImportFile } from '../lib/importFile';
-import { decodeQrImage } from '../lib/qrDecode';
-import { dataUrlToBlob, useFileSaver } from '../lib/saveFile';
 
 const NAME_WELCOME_DISMISSED = 'profile-name-welcome-dismissed:v1';
-const CONFIG_OPEN = 'inventories-config-open:v1';
-
-function configWasOpen(): boolean {
-  try {
-    return localStorage.getItem(CONFIG_OPEN) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function rememberConfigOpen(open: boolean) {
-  try {
-    localStorage.setItem(CONFIG_OPEN, open ? '1' : '0');
-  } catch {
-    // A locked-down WebView may not expose persistent storage.
-  }
-}
 
 function nameWelcomeWasDismissed(): boolean {
   try {
@@ -213,29 +180,22 @@ function SearchResultRow({ result }: { result: SearchResult }) {
 export function InventoriesPage() {
   const navigate = useNavigate();
   const { toast, toastError } = useToast();
-  const { handles, createInventory, unlinkDevice }: UseInventoriesResult = useInventories();
+  const { handles, createInventory }: UseInventoriesResult = useInventories();
 
   const [creating, setCreating] = useState(false);
-  const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [joining, setJoining] = useState(false);
   const [userName, setUserNameState] = useState(() => services.getUserName());
-  const [nameModal, setNameModal] = useState<'welcome' | 'edit' | null>(() =>
-    userName === null && !nameWelcomeWasDismissed() ? 'welcome' : null,
+  const [welcomeOpen, setWelcomeOpen] = useState(
+    () => userName === null && !nameWelcomeWasDismissed(),
   );
-  const [aiKeyMasked, setAiKeyMasked] = useState(() => services.maskedAiKey());
-  const [aiKeyModal, setAiKeyModal] = useState(false);
-  const [backupModal, setBackupModal] = useState(false);
-  const [importState, setImportState] = useState<{ parsed: ParsedImport; fileName: string } | null>(
-    null,
-  );
-  const [accountRestore, setAccountRestore] = useState<{
-    account: ParsedAccount;
-    fileName: string;
-  } | null>(null);
-  const [configOpen, setConfigOpen] = useState(configWasOpen);
   const [dragActive, setDragActive] = useState(false);
   const dragDepth = useRef(0);
-  const importInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Files and codes: share links, device links, exports, account backups,
+  // AI-key QRs — via drag & drop or the Open / Scan modal.
+  const { openText, openFile, modals: importModals } = useImportFlow({
+    onHandled: () => setJoining(false),
+  });
 
   const [searchQuery, setSearchQuery] = useState('');
   const debouncedQuery = useDebounced(searchQuery, SEARCH_DEBOUNCE_MS);
@@ -251,94 +211,15 @@ export function InventoriesPage() {
     [searching, searchable, debouncedQuery],
   );
 
-  /**
-   * One entry point for anything scanned, pasted, or decoded from an image.
-   * Always returns a reason when it refuses: a scanner that silently ignores
-   * a code the user is pointing at is indistinguishable from a broken camera.
-   */
-  const handleScannedText = useCallback(
-    (text: string): { ok: true } | { ok: false; reason: string } => {
-      const aiKey = services.parseAiKeyQr(text);
-      if (aiKey) {
-        services.setAiKey(aiKey);
-        setAiKeyMasked(services.maskedAiKey());
-        setJoining(false);
-        toast('Claude API key installed on this device');
-        return { ok: true };
-      }
-      const backupPayload = services.parseBackupText(text);
-      if (backupPayload) {
-        setJoining(false);
-        navigate(`/restore/${backupPayload}`);
-        return { ok: true };
-      }
-      const parsed = parseShareLink(text);
-      if (!parsed) {
-        return {
-          ok: false,
-          reason: /^https?:\/\//i.test(text.trim())
-            ? 'That is a web link, but not an inventory or device code.'
-            : 'That code is not an inventory link or device code.',
-        };
-      }
-      // A pasted/scanned link's origin is a relay hint the join flow records.
-      if (parsed.origin) rememberRelayHint(parsed.docId, parsed.origin);
-      setJoining(false);
-      navigate(joinRoute(parsed));
-      return { ok: true };
-    },
-    [navigate, toast],
-  );
-
-  /**
-   * Dispatch a dropped or picked file: QR image, single inventory export
-   * (ZIP/YAML), or a full-account backup ZIP.
-   */
-  const handleFile = useCallback(
-    async (file: File) => {
-      const name = file.name.toLowerCase();
-      const isData =
-        name.endsWith('.zip') ||
-        name.endsWith('.yaml') ||
-        name.endsWith('.yml') ||
-        file.type === 'application/zip';
-      if (isData) {
-        try {
-          const result = await parseImportFile(file);
-          if (result.kind === 'account') {
-            setAccountRestore({ account: result.account, fileName: file.name });
-          } else {
-            setImportState({ parsed: result.parsed, fileName: file.name });
-          }
-        } catch (err) {
-          toastError(err instanceof Error ? err.message : 'Could not read this file');
-        }
-        return;
-      }
-      if (file.type.startsWith('image/') || /\.(png|jpe?g|webp)$/.test(name)) {
-        const text = await decodeQrImage(file);
-        if (!text) {
-          toastError('No QR code found in this image');
-          return;
-        }
-        const outcome = handleScannedText(text);
-        if (!outcome.ok) toastError(outcome.reason);
-        return;
-      }
-      toastError('Drop a .zip or .yaml export, or a QR code image');
-    },
-    [handleScannedText, toastError],
-  );
-
   const onDrop = useCallback(
     (event: DragEvent) => {
       event.preventDefault();
       dragDepth.current = 0;
       setDragActive(false);
       const file = event.dataTransfer?.files?.[0];
-      if (file) void handleFile(file);
+      if (file) void openFile(file);
     },
-    [handleFile],
+    [openFile],
   );
 
   return (
@@ -366,116 +247,26 @@ export function InventoriesPage() {
         title="Inventories"
         subtitle="Local-first packing and customs manifests"
         actions={
-          <button type="button" className="btn ghost sm" onClick={() => setJoining(true)}>
-            Open / Scan
-          </button>
+          <>
+            <button type="button" className="btn ghost sm" onClick={() => setJoining(true)}>
+              Open / Scan
+            </button>
+            <Link
+              className="btn ghost icon"
+              aria-label="Account & sync"
+              title="Account & sync"
+              to="/account"
+            >
+              <span aria-hidden="true" style={{ fontSize: '1.25rem' }}>
+                {'\u2699\uFE0E'}
+              </span>
+            </Link>
+          </>
         }
       />
 
       <main className="page narrow">
         <div className="stack">
-          <section aria-label="Profile and device settings">
-            <button
-              type="button"
-              className="profile-row config-toggle"
-              aria-expanded={configOpen}
-              onClick={() => {
-                setConfigOpen((open) => {
-                  rememberConfigOpen(!open);
-                  return !open;
-                });
-              }}
-            >
-              <div className="grow" style={{ textAlign: 'left' }}>
-                <div className="tiny faint">You &amp; this device</div>
-                <div className="small">
-                  {userName || 'Name not set'}
-                  {' · '}
-                  {aiKeyMasked ? 'AI key set' : 'no AI key'}
-                </div>
-              </div>
-              <span className={`chevron${configOpen ? ' open' : ''}`} aria-hidden="true">
-                ›
-              </span>
-            </button>
-
-            {configOpen ? (
-              <div className="stack" style={{ marginTop: 8 }}>
-                <div className="profile-row" aria-label="Your profile">
-                  <div className="grow">
-                    <div className="tiny faint">You</div>
-                    <div className="small">{userName || 'Name not set'}</div>
-                  </div>
-                  <button type="button" className="link-btn" onClick={() => setNameModal('edit')}>
-                    {userName ? 'Change' : 'Set your name'}
-                  </button>
-                </div>
-
-                <div className="profile-row" aria-label="AI key">
-                  <div className="grow">
-                    <div className="tiny faint">Claude API key (this device only)</div>
-                    <div className="small">{aiKeyMasked ?? 'Not set — AI autofill disabled'}</div>
-                  </div>
-                  <button type="button" className="link-btn" onClick={() => setAiKeyModal(true)}>
-                    {aiKeyMasked ? 'Change' : 'Add key'}
-                  </button>
-                </div>
-
-                <div className="profile-row" aria-label="Backup and import">
-                  <div className="grow">
-                    <div className="tiny faint">This device</div>
-                    <div className="small">
-                      Link devices, back up, or import data
-                      {' · '}
-                      <ProfileSyncStatus />
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="link-btn"
-                    onClick={() => importInputRef.current?.click()}
-                  >
-                    Import file
-                  </button>
-                  <button type="button" className="link-btn" onClick={() => setBackupModal(true)}>
-                    Link / backup
-                  </button>
-                </div>
-
-                <div className="profile-row" aria-label="Account">
-                  <div className="grow">
-                    <div className="tiny faint">Account</div>
-                    <div className="small">
-                      {handles.length} inventor{handles.length === 1 ? 'y' : 'ies'} synced across
-                      your linked devices
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    className="link-btn danger"
-                    onClick={() => setConfirmUnlink(true)}
-                  >
-                    Unlink this device
-                  </button>
-                </div>
-
-                <RelaysSection />
-              </div>
-            ) : null}
-
-            <input
-              ref={importInputRef}
-              type="file"
-              accept=".zip,.yaml,.yml,image/*"
-              style={{ display: 'none' }}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = '';
-                if (file) void handleFile(file);
-              }}
-            />
-          </section>
-
           {handles.length > 0 ? (
             <div className="search">
               <input
@@ -554,7 +345,8 @@ export function InventoriesPage() {
             </div>
             <p className="tiny faint">
               Opening a shared link adds it here. Inventories appear on all devices linked to your
-              profile; forgetting one removes it from their lists too.
+              profile; forgetting one removes it from their lists too. Backups, relays and device
+              linking live under the {'\u2699\uFE0E'} Account &amp; sync screen.
             </p>
             </>
           )}
@@ -591,101 +383,31 @@ export function InventoriesPage() {
       {joining ? (
         <JoinLinkModal
           onClose={() => setJoining(false)}
-          onOpen={handleScannedText}
-          onUploadImage={(file) => void handleFile(file)}
+          onOpen={openText}
+          onUploadImage={(file) => void openFile(file)}
         />
       ) : null}
 
-      {backupModal ? <BackupModal onClose={() => setBackupModal(false)} /> : null}
+      {importModals}
 
-      {confirmUnlink ? (
-        <ConfirmModal
-          title="Unlink this device?"
-          body={`This device will leave the account and delete its ${handles.length} inventor${handles.length === 1 ? 'y' : 'ies'}, photos and access tokens from this phone. Your other devices keep everything. To come back later, scan the device-link code from one of them.`}
-          confirmLabel="Unlink"
-          destructive
-          onClose={() => setConfirmUnlink(false)}
-          onConfirm={() => {
-            toast('Unlinking…');
-            unlinkDevice()
-              .then(() => toast('This device left the account'))
-              .catch((err: unknown) =>
-                toastError(err instanceof Error ? err.message : 'Could not unlink this device'),
-              );
-          }}
-        />
-      ) : null}
-
-      {accountRestore ? (
-        <AccountRestoreModal
-          account={accountRestore.account}
-          fileName={accountRestore.fileName}
-          onClose={() => setAccountRestore(null)}
-          onRestored={(summary) => {
-            setAccountRestore(null);
-            toast(summary);
-          }}
-        />
-      ) : null}
-
-      {importState ? (
-        <ImportModal
-          parsed={importState.parsed}
-          fileName={importState.fileName}
-          onClose={() => setImportState(null)}
-          onImported={(docId) => {
-            setImportState(null);
-            toast('Inventory imported');
-            navigate(`/inv/${docId}`);
-          }}
-        />
-      ) : null}
-
-      {aiKeyModal ? (
-        <AiKeyModal
-          hasKey={aiKeyMasked !== null}
-          onClose={() => setAiKeyModal(false)}
-          onSave={(key) => {
-            services.setAiKey(key);
-            setAiKeyMasked(services.maskedAiKey());
-            setAiKeyModal(false);
-            toast(key ? 'API key saved on this device' : 'API key removed');
-          }}
-        />
-      ) : null}
-
-      {nameModal ? (
+      {welcomeOpen ? (
         <NameModal
-          welcome={nameModal === 'welcome'}
+          welcome
           initialValue={userName ?? ''}
           onClose={() => {
-            if (nameModal === 'welcome') rememberNameWelcomeDismissal();
-            setNameModal(null);
+            rememberNameWelcomeDismissal();
+            setWelcomeOpen(false);
           }}
           onSave={(name) => {
             services.setUserName(name);
             setUserNameState(name);
-            setNameModal(null);
+            setWelcomeOpen(false);
             toast('Name saved');
           }}
         />
       ) : null}
     </div>
   );
-}
-
-/** Subtle live status of the profile (device group) sync. */
-function ProfileSyncStatus() {
-  const status = useSyncExternalStore(subscribeProfileStatus, getProfileStatus);
-  const label =
-    status === 'synced'
-      ? 'devices in sync'
-      : status === 'connecting'
-        ? 'linking…'
-        : status === 'error'
-          ? 'device link error'
-          : 'offline';
-  return <span className="faint">{label}</span>;
 }
 
 function formatAgo(epochMs: number): string {
@@ -792,118 +514,6 @@ function InventoryRow({ handle }: { handle: InventoryHandle }) {
   );
 }
 
-function NameModal({
-  welcome,
-  initialValue,
-  onClose,
-  onSave,
-}: {
-  welcome: boolean;
-  initialValue: string;
-  onClose: () => void;
-  onSave: (name: string) => void;
-}) {
-  const [name, setName] = useState(initialValue);
-  const submit = () => {
-    const value = name.trim();
-    if (value) onSave(value);
-  };
-
-  return (
-    <Modal
-      title={welcome ? 'Welcome' : 'Your name'}
-      onClose={onClose}
-      footer={
-        <>
-          <button type="button" className="btn grow" onClick={onClose}>
-            {welcome ? 'Skip for now' : 'Cancel'}
-          </button>
-          <button
-            type="button"
-            className="btn primary grow"
-            disabled={!name.trim()}
-            onClick={submit}
-          >
-            Save
-          </button>
-        </>
-      }
-    >
-      <p className="small muted">Your name is used as the default owner of items you add.</p>
-      <Field label="Name">
-        <input
-          className="input lg"
-          autoFocus
-          autoComplete="name"
-          value={name}
-          placeholder="Your name"
-          onChange={(event) => setName(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') submit();
-          }}
-        />
-      </Field>
-    </Modal>
-  );
-}
-
-function AiKeyModal({
-  hasKey,
-  onClose,
-  onSave,
-}: {
-  hasKey: boolean;
-  onClose: () => void;
-  /** Empty string removes the stored key. */
-  onSave: (key: string) => void;
-}) {
-  const [key, setKey] = useState('');
-
-  return (
-    <Modal
-      title="Claude API key"
-      onClose={onClose}
-      footer={
-        <>
-          {hasKey ? (
-            <button type="button" className="btn danger grow" onClick={() => onSave('')}>
-              Remove key
-            </button>
-          ) : (
-            <button type="button" className="btn grow" onClick={onClose}>
-              Cancel
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn primary grow"
-            disabled={!key.trim()}
-            onClick={() => onSave(key.trim())}
-          >
-            Save
-          </button>
-        </>
-      }
-    >
-      <p className="small muted">
-        Used for AI photo autofill. Calls go straight from this device to Anthropic; the key is
-        stored only here and never shared or synced.
-      </p>
-      <Field label="API key">
-        <input
-          className="input"
-          autoFocus
-          autoComplete="off"
-          spellCheck={false}
-          value={key}
-          placeholder="sk-ant-..."
-          onChange={(event) => setKey(event.target.value)}
-        />
-      </Field>
-    </Modal>
-  );
-}
-
 function CreateInventoryModal({
   onClose,
   onCreate,
@@ -983,138 +593,6 @@ function CreateInventoryModal({
         checked={preciseLocation}
         onChange={setPreciseLocation}
       />
-    </Modal>
-  );
-}
-
-/**
- * Two different things live here, and conflating them is what made the QR
- * unscannable: the DEVICE LINK (tiny, camera-friendly, everything else
- * arrives via profile sync) and the FULL BACKUP (every token, for links and
- * files, where size costs nothing).
- */
-function BackupModal({ onClose }: { onClose: () => void }) {
-  const { toast, toastError } = useToast();
-  const { saveFile } = useFileSaver();
-  const [linkPayload] = useState(() => services.encodeLinkToken());
-  const [backupPayload] = useState(() => services.encodeBackup());
-  const [zipBusy, setZipBusy] = useState<string | null>(null);
-  const linkUrl = buildBackupUrl(linkPayload);
-  const backupUrl = buildBackupUrl(backupPayload);
-
-  const copy = async (text: string, label: string) => {
-    if (await copyToClipboard(text)) toast(`${label} copied`);
-    else toastError('Clipboard unavailable — long-press the link to copy it');
-  };
-
-  const shareQr = async (url: string, kind: 'device-link' | 'full-backup') => {
-    try {
-      const dataUrl = await QRCode.toDataURL(url, {
-        // A saved image is decoded from clean pixels, not through a camera,
-        // so the dense full backup survives here even though it cannot be
-        // scanned off a screen.
-        width: kind === 'full-backup' ? 1280 : 640,
-        margin: 2,
-        errorCorrectionLevel: kind === 'full-backup' ? 'M' : 'Q',
-        color: { dark: '#0b0e11', light: '#ffffff' },
-      });
-      const filename = `peerventory-${kind}-${new Date().toISOString().slice(0, 10)}.png`;
-      await saveFile(dataUrlToBlob(dataUrl), filename, 'QR image');
-    } catch {
-      toastError('This backup is too large for a QR code — use the link instead');
-    }
-  };
-
-  const shareAccountZip = async () => {
-    if (zipBusy !== null) return;
-    setZipBusy('Packing…');
-    try {
-      const { blob, filename, inventories } = await buildAccountBackup((done, total) =>
-        setZipBusy(`Packing ${done}/${total}`),
-      );
-      await saveFile(
-        blob,
-        filename,
-        `Account backup (${inventories} inventor${inventories === 1 ? 'y' : 'ies'})`,
-      );
-    } catch (err) {
-      toastError(err instanceof Error ? err.message : 'Could not build the account backup');
-    } finally {
-      setZipBusy(null);
-    }
-  };
-
-  return (
-    <Modal
-      title="Link a device / backup"
-      onClose={onClose}
-      footer={
-        <button type="button" className="btn grow" onClick={onClose}>
-          Done
-        </button>
-      }
-    >
-      <p className="small muted">
-        <strong>Link a device to this account.</strong> Scan this with Open / Scan on your other
-        device: it joins your account and every inventory follows through sync — including the
-        ones you add later. To share a single inventory with someone else, use Share inside that
-        inventory instead.
-      </p>
-      <QrCanvas value={linkUrl} size={308} ecc="Q" />
-      <div className="row" style={{ justifyContent: 'center' }}>
-        <button type="button" className="link-btn" onClick={() => void copy(linkUrl, 'Link')}>
-          Copy link
-        </button>
-        <button
-          type="button"
-          className="link-btn"
-          onClick={() => void shareQr(linkUrl, 'device-link')}
-        >
-          Share QR image
-        </button>
-      </div>
-      <p className="tiny faint">
-        The code carries access to your account, not the data itself. Anyone holding it gets
-        everything you have — treat it like a password.
-      </p>
-      <hr />
-      <p className="small muted">
-        <strong>Full account backup (.zip).</strong> One file with your account and the complete
-        contents of every inventory, photos included. This is the offline backup: restoring it
-        brings everything back even with no relay in reach. Drop it on the inventories list (or use
-        Import file) to restore.
-      </p>
-      <button
-        type="button"
-        className="btn primary"
-        disabled={zipBusy !== null}
-        onClick={() => void shareAccountZip()}
-      >
-        {zipBusy !== null ? <Spinner /> : null} {zipBusy ?? 'Share full account backup (.zip)'}
-      </button>
-      <hr />
-      <p className="tiny faint">
-        <strong>Full backup link.</strong> Every inventory token in one payload — access only, so
-        the contents are pulled from a relay afterwards. For archiving alongside the ZIP and for
-        connecting the browser extension. Far too dense to read off a screen with a camera, so use
-        the link — or the saved image, which decodes from clean pixels.
-      </p>
-      <div className="row" style={{ justifyContent: 'center' }}>
-        <button
-          type="button"
-          className="link-btn"
-          onClick={() => void copy(backupUrl, 'Full backup link')}
-        >
-          Copy full backup link
-        </button>
-        <button
-          type="button"
-          className="link-btn"
-          onClick={() => void shareQr(backupUrl, 'full-backup')}
-        >
-          Share full backup image
-        </button>
-      </div>
     </Modal>
   );
 }

@@ -1,7 +1,8 @@
 /**
- * Device relay management (Inventories page, "You & this device" area):
+ * Device relay management (Account & sync page, "Sync & relays" card):
  * list/add/remove/enable relays, per-relay reachability dot, and the
- * device-wide "direct device-to-device sync" (WebRTC) toggle.
+ * device-wide "direct device-to-device sync" (WebRTC) toggle. The section
+ * title and intro text are provided by the page hosting it.
  */
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
@@ -73,17 +74,7 @@ export function RelaysSection() {
   };
 
   return (
-    <div className="stack" style={{ marginTop: 8 }}>
-      <div className="profile-row" aria-label="Sync relays">
-        <div className="grow">
-          <div className="tiny faint">Sync relays (this device)</div>
-          <div className="small">
-            Interchangeable, self-hostable servers that only ever store encrypted data. Inventories
-            can sync through several at once.
-          </div>
-        </div>
-      </div>
-
+    <div className="stack">
       {relays.map((relay) => {
         const dot = relay.enabled ? healthToDot[health[relay.url] ?? 'checking'] : 'offline';
         return (
