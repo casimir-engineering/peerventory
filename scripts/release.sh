@@ -120,8 +120,14 @@ if [ -z "$NOTES_FILE" ]; then
     echo "Changes since the previous release:"
     echo
     prev="$(gh release list -R "$REPO" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)"
-    range="${prev:+$prev..HEAD}"
-    git log ${range:-} --no-merges --pretty='- %s' | head -40
+    # `gh release create` tags on the server, so the previous tag is usually
+    # absent locally. Fetch it, and fall back to the whole history rather than
+    # dying on an unknown revision.
+    if [ -n "$prev" ]; then
+      git fetch --quiet --tags origin >/dev/null 2>&1 || true
+      git rev-parse -q --verify "${prev}^{commit}" >/dev/null 2>&1 || prev=""
+    fi
+    git log ${prev:+"$prev..HEAD"} --no-merges --pretty='- %s' | head -40
   } > "$NOTES_FILE"
 fi
 
