@@ -13,6 +13,24 @@ Runs as an installable web PWA (desktop + mobile) and as an Android APK built
 from the same codebase with Capacitor (with native niceties like system
 back-button navigation through the app's screens).
 
+## Install on Android
+
+Download **`inventory-release.apk`** from the
+[latest release](https://github.com/casimir-engineering/peerventory/releases/latest)
+and open it on the phone. Android asks once for permission to install apps from
+your browser; after that the APK installs like any other app. There is no Play
+Store listing — the app is sideloaded.
+
+The app checks GitHub for a newer release on start and shows a dismissible
+"Update available" strip; Account & sync also has a manual **Check for
+updates** with the installed version. Tapping Download hands the APK to your
+browser, and the finished download installs over the existing app, keeping all
+data. Every release is signed with the same key, which is what lets Android
+treat it as an update rather than a different app.
+
+On desktop or as a PWA nothing is needed: the service worker picks up new
+versions on its own.
+
 ## Screenshots
 
 Demo inventory seeded on a local dev instance:
@@ -202,6 +220,36 @@ npx cap sync android
 cd android && ./gradlew assembleRelease
 # then zipalign + apksigner with your own keystore
 ```
+
+`app/package.json`'s `version` is the single source of truth: vite bakes it
+into the bundle as the version the updater compares against, and
+`app/android/app/build.gradle` reads the same file for `versionName` plus a
+derived `versionCode` (1.1.0 → 10100).
+
+## Releasing
+
+```bash
+scripts/release.sh 1.2.0     # bump, build web + signed APK, publish to GitHub
+scripts/release.sh --dry-run # everything except the GitHub release
+scripts/release.sh --apk-only
+```
+
+One command does the version bump, the production web build, `cap sync`,
+`assembleRelease`, zipalign, apksigner, and `gh release create` with the APK
+attached and notes generated from the commits since the previous tag. It
+refuses to run if `scripts/secret-scan.sh` fails or the tag already exists.
+
+Releases are cut from the maintainer's machine, not CI, and deliberately so:
+the upload key lives in `secrets/release.keystore` (gitignored, never
+uploaded). Android only accepts an update signed with the same key as the
+installed app, so that keystore is the one irreplaceable artifact — losing it
+means every user has to uninstall and reinstall. The script reads its password
+from `PV_KEYSTORE_PASS` or `secrets/keystore.pass`.
+
+`scripts/secret-scan.sh` runs in CI on every push and as a pre-commit hook
+(`git config core.hooksPath .githooks`), failing on API keys, tokens, private
+keys, signing passwords, and any attempt to track `secrets/`, `.env`, or
+keystore/APK files.
 
 ## Deployment
 

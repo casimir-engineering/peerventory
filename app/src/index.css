@@ -1527,3 +1527,20 @@ table.data th.num {
   box-shadow: 0 0 0 999px rgb(0 0 0 / 0.35);
   pointer-events: none;
 }
+
+/* ------------------------------------------------- sideload update notice */
+
+/* Sits above the sticky header in document flow: visible on arrival, scrolls
+   away, and never covers content or the bottom bar. Android APK only. */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: calc(var(--safe-t) + 10px) 12px 10px;
+  background: var(--accent-soft);
+  border-bottom: 1px solid var(--accent);
+}
+
+.update-banner .grow {
+  min-width: 0;
+}

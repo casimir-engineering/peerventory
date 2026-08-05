@@ -1,5 +1,12 @@
 apply plugin: 'com.android.application'
 
+// Version comes from app/package.json so the web bundle, the APK and the
+// GitHub release tag can never drift apart. versionCode is derived from the
+// semver triple (1.1.0 -> 10100) so it increases monotonically with releases.
+def appVersionName = new groovy.json.JsonSlurper().parse(file('../../package.json')).version
+def (verMajor, verMinor, verPatch) = appVersionName.tokenize('.').collect { it.toInteger() }
+def appVersionCode = verMajor * 10000 + verMinor * 100 + verPatch
+
 android {
     namespace = "dev.raph.inventory"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +14,8 @@ android {
         applicationId "dev.raph.inventory"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode appVersionCode
+        versionName appVersionName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

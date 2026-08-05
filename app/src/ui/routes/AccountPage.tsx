@@ -21,6 +21,7 @@ import { ConfirmModal, Modal } from '../components/Modal';
 import { QrCanvas } from '../components/QrCanvas';
 import { useToast } from '../components/Toast';
 import { RelaysSection } from '../components/RelaysSection';
+import { UpdateSection } from '../components/UpdateBanner';
 import { buildAccountBackup } from '../lib/accountBackup';
 import { buildBackupUrl, copyToClipboard } from '../lib/links';
 import { dataUrlToBlob, useFileSaver } from '../lib/saveFile';
@@ -164,6 +165,8 @@ export function AccountPage() {
               without it.
             </p>
           </section>
+
+          <UpdateSection />
 
           <section className="card stack tight">
             <SectionTitle>This device</SectionTitle>

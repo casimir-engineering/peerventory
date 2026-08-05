@@ -5,6 +5,7 @@ import { startProfileSync } from './store';
 import './index.css';
 import './ui/app2.css';
 import { ToastProvider } from './ui/components/Toast';
+import { UpdateBanner } from './ui/components/UpdateBanner';
 import { AccountPage } from './ui/routes/AccountPage';
 import { InventoriesPage } from './ui/routes/InventoriesPage';
 import { InventoryHomePage } from './ui/routes/InventoryHomePage';
@@ -33,6 +34,7 @@ export default function App() {
     <ToastProvider>
       <HashRouter>
         <div className="app">
+          <UpdateBanner />
           <Routes>
             <Route path="/" element={<InventoriesPage />} />
             <Route path="/account" element={<AccountPage />} />
