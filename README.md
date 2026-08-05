@@ -31,6 +31,14 @@ treat it as an update rather than a different app.
 On desktop or as a PWA nothing is needed: the service worker picks up new
 versions on its own.
 
+The launcher label is **Peerventory**, so searching your app drawer for
+"inventory" will not find it — launcher search matches the label as a substring
+(or a fuzzy subsequence), and "Peerventory" contains neither an "i" nor
+"inventory". Search for "peer" or "ventory" instead. An `activity-alias`
+labelled "Inventory" would make it searchable, but only with
+`category.LAUNCHER`, which puts a second icon in the drawer — not worth it, so
+the alias is deliberately not shipped.
+
 ## Screenshots
 
 Demo inventory seeded on a local dev instance:

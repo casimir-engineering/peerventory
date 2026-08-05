@@ -352,7 +352,7 @@ export async function inventoryToXlsx(
   loadPhoto?: XlsxPhotoLoader,
 ): Promise<Blob> {
   const workbook = new Workbook();
-  workbook.creator = 'Inventory App';
+  workbook.creator = 'Peerventory';
   workbook.created = new Date();
 
   const items = selectItems(snap, itemIds);

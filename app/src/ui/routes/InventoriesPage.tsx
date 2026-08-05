@@ -244,7 +244,7 @@ export function InventoriesPage() {
         </div>
       ) : null}
       <AppHeader
-        title="Inventories"
+        title="Peerventory"
         subtitle="Local-first packing and customs manifests"
         actions={
           <>

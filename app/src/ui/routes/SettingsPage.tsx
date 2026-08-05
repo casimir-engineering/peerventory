@@ -42,7 +42,7 @@ export function SettingsPage() {
   useEffect(() => {
     document.title = inv.meta?.name ? `${inv.meta.name} — settings` : 'Inventory settings';
     return () => {
-      document.title = 'Inventory';
+      document.title = 'Peerventory';
     };
   }, [inv.meta?.name]);
 

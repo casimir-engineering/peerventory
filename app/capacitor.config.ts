@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'dev.raph.inventory',
-  appName: 'Inventory',
+  appName: 'Peerventory',
   webDir: 'dist',
   android: {
     allowMixedContent: false,

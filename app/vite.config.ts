@@ -39,8 +39,8 @@ export default defineConfig({
         ],
       },
       manifest: {
-        name: 'Inventory',
-        short_name: 'Inventory',
+        name: 'Peerventory',
+        short_name: 'Peerventory',
         description: 'Local-first inventory for customs and forwarding',
         theme_color: '#101418',
         background_color: '#101418',
