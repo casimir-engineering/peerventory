@@ -41,6 +41,7 @@ import { generateContentKey, isValidContentKey } from './crypto';
 import { newId, newToken } from './ids';
 import { readOwners, resolveOwnerIdForName, upsertOwner } from './owners';
 import { addPhoto as storeAddPhoto, clearUploadQueue, kickUploadLoop } from './photos';
+import { profileRecordInventory, profileRecordRemoval } from './profileSync';
 import {
   getHandlesSnapshot,
   getRegistryVersion,
@@ -89,10 +90,21 @@ async function createInventory(
     meta.set('preciseLocation', opts?.preciseLocation ?? true);
   });
 
+  // Share the new inventory with the user's other devices via the profile doc.
+  profileRecordInventory(docId);
+
   return getStoredHandle(docId)!;
 }
 
 async function joinInventory(docId: Id, token: string, key?: string): Promise<InventoryHandle> {
+  const handle = await joinInventoryImpl(docId, token, key);
+  // Joining (or re-joining after a removal elsewhere) syncs the handle to the
+  // user's other devices, reviving a profile-doc tombstone if there is one.
+  profileRecordInventory(docId);
+  return handle;
+}
+
+async function joinInventoryImpl(docId: Id, token: string, key?: string): Promise<InventoryHandle> {
   const contentKey = key && isValidContentKey(key) ? key : undefined;
   const existing = getStoredHandle(docId);
   if (existing) {
@@ -157,6 +169,9 @@ async function forgetInventory(docId: Id): Promise<void> {
   await closeDoc(docId, { clearData: true });
   await clearUploadQueue(docId);
   removeHandle(docId);
+  // Tombstone in the profile doc: other devices drop it from their lists but
+  // keep their locally cached data (see profileSync.ts).
+  profileRecordRemoval(docId);
 }
 
 export function useInventories(): UseInventoriesResult {

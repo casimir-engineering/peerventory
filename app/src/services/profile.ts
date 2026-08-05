@@ -4,11 +4,27 @@
  */
 
 import type { Id } from '../types';
-import { newId } from '../store/ids';
+import { newId, newToken } from '../store/ids';
+import { generateContentKey } from '../store/crypto';
 
 const PROFILE_KEY = 'profile:v1';
 const INPUTS_KEY = 'inputs:v1';
 const INPUTS_CAP = 20;
+
+/**
+ * Identity of the synced profile doc (the "device group" doc, see
+ * store/profileSync.ts and CONTRACTS.md "Synced profile"). Same shape of
+ * secrets as an inventory handle: relay tokens + E2E content key.
+ */
+export interface ProfileDocHandle {
+  docId: string;
+  rwToken?: string;
+  roToken?: string;
+  /** E2E content key (base64url, 32 bytes); never reaches the server. */
+  key?: string;
+  /** True until the relay accepts the create handshake for this doc. */
+  pendingCreate?: boolean;
+}
 
 interface Profile {
   userName?: string;
@@ -25,6 +41,8 @@ interface Profile {
    */
   ownerIdLinks?: Record<string, string>;
   lastCurrency?: string;
+  /** Handle of this user's synced profile doc (lazily created / adopted). */
+  profileDoc?: ProfileDocHandle;
 }
 
 /**
@@ -93,6 +111,39 @@ export function getOwnerId(): string {
 /** Adopt an owner id (backup restore on a fresh device). Never overwrites. */
 export function setOwnerId(id: string): void {
   if (!getStoredOwnerId() && id) writeProfile({ ownerId: id });
+}
+
+/** Stored profile-doc handle, or null when none was created/adopted yet. */
+export function getProfileDocHandle(): ProfileDocHandle | null {
+  const h = readProfile().profileDoc;
+  if (h && typeof h === 'object' && typeof h.docId === 'string' && h.docId) return h;
+  return null;
+}
+
+/** Get-or-create the profile-doc identity (docId + tokens + content key). */
+export function ensureProfileDocHandle(): ProfileDocHandle {
+  const existing = getProfileDocHandle();
+  if (existing) return existing;
+  const handle: ProfileDocHandle = {
+    docId: newId(),
+    rwToken: newToken(),
+    roToken: newToken(),
+    key: generateContentKey(),
+    pendingCreate: true,
+  };
+  writeProfile({ profileDoc: handle });
+  return handle;
+}
+
+/** Replace the profile-doc handle (adopting a profile from a backup). */
+export function setProfileDocHandle(handle: ProfileDocHandle): void {
+  writeProfile({ profileDoc: handle });
+}
+
+export function updateProfileDocHandle(patch: Partial<ProfileDocHandle>): void {
+  const current = getProfileDocHandle();
+  if (!current) return;
+  writeProfile({ profileDoc: { ...current, ...patch } });
 }
 
 export function linkedOwnerIdFor(docId: Id): string | null {

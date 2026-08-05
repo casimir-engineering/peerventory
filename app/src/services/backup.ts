@@ -5,16 +5,28 @@
  * access to everything on this device.
  *
  * Payload v2 = base64url(JSON): { v:2, n?:name, oi?:ownerId, a?:aliases,
- * c?:lastCurrency, k?:aiKey, h:[{ d, rw?, ro?, ek?, nm? }] } where `ek` is
- * the per-inventory content encryption key of end-to-end encrypted docs and
- * `oi` is the stable owner id of this user (so a restored device keeps the
- * same owner identity). v1 payloads (no keys) and v2 payloads without `oi`
- * are still accepted.
+ * c?:lastCurrency, k?:aiKey, p?:profileDoc, h:[{ d, rw?, ro?, ek?, nm? }] }
+ * where `ek` is the per-inventory content encryption key of end-to-end
+ * encrypted docs and `oi` is the stable owner id of this user (so a restored
+ * device keeps the same owner identity). `p` = { d, rw?, ro?, ek } is the
+ * handle of the SYNCED PROFILE DOC (see store/profileSync.ts): importing it
+ * links the devices permanently — inventories created later flow through
+ * profile sync instead of needing a fresh backup. v1 payloads (no keys) and
+ * v2 payloads without `oi`/`p` are still accepted and import statically.
  */
 
-import { getHandlesSnapshot, getStoredHandle, importHandles, reopenEncryptedDoc } from '../store';
+import {
+  adoptProfileHandle,
+  getHandlesSnapshot,
+  getStoredHandle,
+  importHandles,
+  profileRecordInventory,
+  reopenEncryptedDoc,
+  startProfileSync,
+} from '../store';
 import { getAiKey, setAiKey } from './aikey';
 import {
+  ensureProfileDocHandle,
   getLastCurrency,
   getOwnerAliases,
   getOwnerId,
@@ -43,6 +55,12 @@ export interface DecodedBackup {
   aliases?: Record<string, string>;
   lastCurrency?: string;
   aiKey?: string;
+  /**
+   * Handle of the exporting device's synced profile doc. Importing it links
+   * this device into the same device group: the inventory list itself syncs
+   * from then on. Absent in old backups (which import statically).
+   */
+  profile?: { docId: string; rwToken?: string; roToken?: string; key?: string };
   handles: BackupHandle[];
 }
 
@@ -53,6 +71,7 @@ interface WirePayload {
   a?: Record<string, string>;
   c?: string;
   k?: string;
+  p?: { d: string; rw?: string; ro?: string; ek?: string };
   h: Array<{ d: string; rw?: string; ro?: string; ek?: string; nm?: string }>;
 }
 
@@ -89,6 +108,17 @@ export function encodeBackup(): string {
   const name = getUserName();
   if (name) wire.n = name;
   wire.oi = getOwnerId();
+  // The profile-doc handle makes this backup a permanent device link: the
+  // importing device joins the synced inventory list instead of copying it.
+  const prof = ensureProfileDocHandle();
+  if (prof.key && (prof.rwToken || prof.roToken)) {
+    wire.p = {
+      d: prof.docId,
+      ...(prof.rwToken ? { rw: prof.rwToken } : {}),
+      ...(prof.roToken ? { ro: prof.roToken } : {}),
+      ek: prof.key,
+    };
+  }
   const aliases = getOwnerAliases();
   if (Object.keys(aliases).length > 0) wire.a = aliases;
   const currency = getLastCurrency();
@@ -118,6 +148,15 @@ export function decodeBackup(payload: string): DecodedBackup | null {
       aliases: wire.a && typeof wire.a === 'object' ? wire.a : undefined,
       lastCurrency: typeof wire.c === 'string' ? wire.c : undefined,
       aiKey: typeof wire.k === 'string' ? wire.k : undefined,
+      profile:
+        wire.p && typeof wire.p === 'object' && typeof wire.p.d === 'string' && wire.p.d
+          ? {
+              docId: wire.p.d,
+              rwToken: typeof wire.p.rw === 'string' ? wire.p.rw : undefined,
+              roToken: typeof wire.p.ro === 'string' ? wire.p.ro : undefined,
+              key: typeof wire.p.ek === 'string' ? wire.p.ek : undefined,
+            }
+          : undefined,
       handles: wire.h
         .filter((h) => typeof h?.d === 'string' && h.d)
         .map((h) => ({
@@ -139,6 +178,8 @@ export interface ImportBackupResult {
   unchanged: number;
   nameApplied: boolean;
   aiKeyApplied: boolean;
+  /** This device joined (or switched to) the backup's synced profile. */
+  profileLinked: boolean;
 }
 
 /**
@@ -178,6 +219,16 @@ export function importBackup(backup: DecodedBackup): ImportBackupResult {
     void reopenEncryptedDoc(docId);
   }
 
+  // Join the exporter's synced profile (device group) when the payload
+  // carries one; otherwise the static import above is merged into THIS
+  // device's own profile doc by the sync engine. Explicitly recording each
+  // imported handle also revives profile-doc tombstones: importing a backup
+  // deliberately brings its inventories back.
+  let profileLinked = false;
+  if (backup.profile) profileLinked = adoptProfileHandle(backup.profile);
+  startProfileSync();
+  for (const h of backup.handles) profileRecordInventory(h.docId);
+
   if (backup.lastCurrency && !getLastCurrency()) setLastCurrency(backup.lastCurrency);
 
   let aiKeyApplied = false;
@@ -186,5 +237,5 @@ export function importBackup(backup: DecodedBackup): ImportBackupResult {
     aiKeyApplied = true;
   }
 
-  return { ...counts, nameApplied, aiKeyApplied };
+  return { ...counts, nameApplied, aiKeyApplied, profileLinked };
 }

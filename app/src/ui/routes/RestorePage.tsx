@@ -49,9 +49,8 @@ export function RestorePage() {
       if (result.added > 0) parts.push(`${result.added} added`);
       if (result.upgraded > 0) parts.push(`${result.upgraded} upgraded to edit access`);
       if (result.unchanged > 0) parts.push(`${result.unchanged} already here`);
-      toast(
-        parts.length > 0 ? `Inventories: ${parts.join(', ')}` : 'Backup imported',
-      );
+      const summary = parts.length > 0 ? `Inventories: ${parts.join(', ')}` : 'Backup imported';
+      toast(result.profileLinked ? `Devices linked · ${summary}` : summary);
       navigate('/', { replace: true });
     } catch (err) {
       toastError(err instanceof Error ? err.message : 'Import failed');
@@ -93,6 +92,9 @@ export function RestorePage() {
             <p className="tiny faint">
               Importing merges with what is already on this device. Nothing is overwritten or
               downgraded: your existing name, key and edit access always win.
+              {backup.profile
+                ? ' This code also links the two devices permanently: inventories created or joined on one will appear on the other automatically.'
+                : ''}
             </p>
             <div className="row">
               <button type="button" className="btn grow" onClick={() => navigate('/')}>

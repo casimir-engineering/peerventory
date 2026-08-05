@@ -315,7 +315,7 @@ export function SettingsPage() {
       {confirmForget ? (
         <ConfirmModal
           title="Forget inventory"
-          body="The local copy and the share tokens are deleted from this device. Make sure someone else still has a link before continuing."
+          body="The local copy and the share tokens are deleted from this device, and the inventory leaves the list on your linked devices too (their downloaded data is kept). Make sure someone else still has a link before continuing."
           confirmLabel="Forget"
           destructive
           onClose={() => setConfirmForget(false)}

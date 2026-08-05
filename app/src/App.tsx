@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import * as services from './services';
+import { startProfileSync } from './store';
 import './index.css';
 import './ui/app2.css';
 import { ToastProvider } from './ui/components/Toast';
@@ -21,6 +22,10 @@ import { StatsPage } from './ui/routes/StatsPage';
 export default function App() {
   useEffect(() => {
     void services.ensureRates();
+    // Profile sync: lazily creates the profile doc on first run (migrating
+    // the current local registry into it) and keeps the inventory list in
+    // sync across this user's devices.
+    startProfileSync();
   }, []);
 
   return (

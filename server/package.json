@@ -10,7 +10,8 @@
     "selftest": "tsx src/selftest.ts",
     "selftest:ai": "tsx src/ai-selftest.ts",
     "e2e": "tsx src/e2e-two-clients.ts",
-    "e2e:enc": "tsx src/e2e-encrypted.ts"
+    "e2e:enc": "tsx src/e2e-encrypted.ts",
+    "e2e:profile": "tsx src/e2e-profile.ts"
   },
   "dependencies": {
     "@hocuspocus/extension-sqlite": "^4.4.0",

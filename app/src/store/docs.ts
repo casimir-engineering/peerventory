@@ -16,7 +16,7 @@ import { sha256Hex } from './ids';
 import { ensureSelfOwner } from './owners';
 import { getStoredHandle, updateHandle } from './registry';
 // Direct module import (not the services barrel), cycle-free: profile only
-// imports types and store/ids.
+// imports types and the leaf modules store/ids + store/crypto.
 import { subscribeOwnerName } from '../services/profile';
 
 export interface DocEntry {

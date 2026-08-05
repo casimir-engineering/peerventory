@@ -123,8 +123,9 @@ Design alternatives considered (decision record):
   cannot decrypt: the UI shows "Encryption key missing" until a full link or
   QR code delivers the key.
 - Backup payload v2: handle entries carry `ek` (content key) and the payload
-  carries `oi` (the user's stable owner id, see "Owner identity"); v1
-  payloads (no keys) and payloads without `oi` are still accepted on restore.
+  carries `oi` (the user's stable owner id, see "Owner identity") and `p`
+  (the synced-profile doc handle, see "Synced profile"); v1 payloads (no
+  keys) and payloads without `oi`/`p` are still accepted on restore.
 
 ## Blob API (photos)
 
@@ -171,6 +172,43 @@ All services degrade silently offline; the app never blocks on them.
 - `aikey.ts`: per-device Anthropic key in localStorage `aiKey:v1` (never synced, never sent to our server). `getAiKey/setAiKey/clearAiKey/maskedAiKey`, and QR provisioning: a scanned code `inv-ai:<key>` (see `parseAiKeyQr`, handled by the Open/Scan flow) installs the key on the device.
 
 `AiSuggestions` (all fields optional): `description, category, tags: string[], brandModel, valueCurrent: {amount,currency}, valueNew: {amount,currency}, weightGrams: number, dimensionsMm: {l,w,h}, lithiumBattery: boolean, countryOfOrigin, hsCode, condition, translations: Record<string,string>`.
+
+## Synced profile (device group)
+
+The set of inventory handles itself syncs between a user's devices through a
+dedicated PROFILE DOC (`app/src/store/profileSync.ts`), so a backup QR links
+devices permanently instead of copying a static snapshot. To the relay the
+profile doc is just another doc: same outer `enc:log` E2E wrapping, same
+rw/ro tokens with sha256-hash auth and the same create handshake — zero
+server changes.
+
+- Identity: `{ docId, rwToken, roToken, key }` stored locally in
+  `profile:v1` (`profileDoc`), generated lazily on first app start (the
+  migration path for existing installs: the engine then seeds the doc from
+  the current local registry). Devices share it only via backup payloads.
+- Inner doc schema:
+  - `Y.Map('profile')`: `{ name?: string, ownerId?: string }` — the display
+    name syncs (doc wins on sync; an explicit local rename pushes); ownerId
+    is fill-only, same rule as backup import.
+  - `Y.Map('inventories')`: `docId -> { d, rw?, ro?, ek?, nm?, removed?,
+    at }` — one plain-object entry per inventory keyed by docId, so
+    concurrent list edits merge per inventory (LWW per entry). The AI key is
+    NEVER stored here.
+- Mirroring: doc -> registry goes through `importHandles` (never downgrades
+  access); newly arrived handles are opened immediately so the inventory
+  materializes through normal sync. Registry -> doc is a debounced fill-only
+  merge (a device missing a token/key cannot erase it from the entry).
+- Removal semantics (chosen): leaving/forgetting an inventory writes a
+  `removed: true` tombstone. Other devices drop the handle from their
+  registry/list but RETAIN their locally cached doc data (close without
+  clear) — nothing is silently deleted; re-joining via share link or backup
+  import writes a live entry over the tombstone and revives the inventory
+  everywhere.
+- Backups: payload v2 gains `p = { d, rw?, ro?, ek }`. Import with `p` =
+  "join that profile" (an existing local profile is switched to the imported
+  one and the local registry is pushed into it, so both devices converge on
+  one list). Old payloads without `p` import statically as before, and the
+  imported handles are merged into the importing device's own profile doc.
 
 ## Owner identity (stable owner ids)
 

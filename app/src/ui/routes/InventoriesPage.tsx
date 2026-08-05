@@ -1,9 +1,15 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DragEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import * as services from '../../services';
-import { getDeviceId, snapshotInventory, useInventories } from '../../store';
+import {
+  getDeviceId,
+  getProfileStatus,
+  snapshotInventory,
+  subscribeProfileStatus,
+  useInventories,
+} from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
 import type { Id, InventoryHandle, InventorySnapshot, Item } from '../../types';
 import { formatAmount, formatMoney } from '../lib/format';
@@ -387,7 +393,11 @@ export function InventoriesPage() {
                 <div className="profile-row" aria-label="Backup and import">
                   <div className="grow">
                     <div className="tiny faint">This device</div>
-                    <div className="small">Backup, transfer, or import data</div>
+                    <div className="small">
+                      Link devices, back up, or import data
+                      {' · '}
+                      <ProfileSyncStatus />
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -493,8 +503,8 @@ export function InventoriesPage() {
               </div>
             </div>
             <p className="tiny faint">
-              Opening a shared link adds it here. Forgetting an inventory only removes it from this
-              device.
+              Opening a shared link adds it here. Inventories appear on all devices linked to your
+              profile; forgetting one removes it from their lists too.
             </p>
             </>
           )}
@@ -586,6 +596,20 @@ export function InventoriesPage() {
       ) : null}
     </div>
   );
+}
+
+/** Subtle live status of the profile (device group) sync. */
+function ProfileSyncStatus() {
+  const status = useSyncExternalStore(subscribeProfileStatus, getProfileStatus);
+  const label =
+    status === 'synced'
+      ? 'devices in sync'
+      : status === 'connecting'
+        ? 'linking…'
+        : status === 'error'
+          ? 'device link error'
+          : 'offline';
+  return <span className="faint">{label}</span>;
 }
 
 function formatAgo(epochMs: number): string {
@@ -930,8 +954,9 @@ function BackupModal({ onClose }: { onClose: () => void }) {
     >
       <p className="small muted">
         This code carries your name, your inventories with their access tokens, and your API key
-        if one is set. Scan it with Open / Scan on the new device (or open the link there) to move
-        everything over. Anyone holding it gets the same access — treat it like a password.
+        if one is set. Scan it with Open / Scan on the other device (or open the link there) to
+        link the devices permanently. Anyone holding it gets the same access — treat it like a
+        password.
       </p>
       <QrCanvas value={url} size={264} />
       <div className="row" style={{ justifyContent: 'center' }}>
@@ -943,9 +968,9 @@ function BackupModal({ onClose }: { onClose: () => void }) {
         </button>
       </div>
       <p className="tiny faint">
-        The backup contains access tokens, not the data itself: the new device pulls items and
-        photos from sync after import. Item data added later is not in this code — make a fresh
-        backup when you add inventories.
+        The code contains access tokens, not the data itself: the other device pulls items and
+        photos from sync after import. Linked devices share one profile — inventories you create
+        or join later appear on all of them automatically, no fresh backup needed.
       </p>
     </Modal>
   );

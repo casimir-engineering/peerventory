@@ -12,6 +12,13 @@ export { newId, newToken } from './ids';
 export { getDeviceId } from './device';
 export { ownerDisplayName } from './owners';
 export { getHandlesSnapshot, getStoredHandle, importHandles } from './registry';
+export {
+  startProfileSync,
+  subscribeProfileStatus,
+  getProfileStatus,
+  adoptProfileHandle,
+  profileRecordInventory,
+} from './profileSync';
 export type {
   ItemDraft,
   ItemPatch,
