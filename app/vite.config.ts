@@ -46,8 +46,16 @@ export default defineConfig({
         background_color: '#101418',
         display: 'standalone',
         icons: [
-          { src: 'icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icon-512.png', sizes: '512x512', type: 'image/png' },
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          // Separate maskable entry: Android shrinks the icon into its own mask,
+          // so this one is full-bleed with the motif inside the 80% safe circle.
+          {
+            src: 'icon-maskable-512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable',
+          },
         ],
       },
     }),

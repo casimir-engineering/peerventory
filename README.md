@@ -194,6 +194,8 @@ to all my relays" in an inventory's settings pushes existing ones there.
   forms from the app's Sell payload, plus its tests
 - `deploy/` — Docker Compose deployments: standalone with Caddy TLS
   (`deploy/`), or behind an existing reverse proxy (`deploy/npm-proxy/`)
+- `design/` — `icon-source.png`, the 1024×1024 master every app icon is cut
+  from, plus the generated `icon-preview.png` contact sheet
 - `CONTRACTS.md` — binding protocol contracts between app and server
 - `docs/screenshots/` — the images above
 
@@ -225,6 +227,22 @@ cd android && ./gradlew assembleRelease
 into the bundle as the version the updater compares against, and
 `app/android/app/build.gradle` reads the same file for `versionName` plus a
 derived `versionCode` (1.1.0 → 10100).
+
+### Icons
+
+```bash
+scripts/gen-icons.sh --preview   # rewrite every icon from design/icon-source.png
+```
+
+Every launcher, PWA, splash, and favicon asset is generated from
+`design/icon-source.png` with ImageMagick, so the icon is never edited in
+place. The script cuts two derivatives from the master — the whole tile with
+the area outside its rounded corners made transparent, and the boxes alone on
+transparency — and sizes the second one so its bounding box clears a circular
+mask in every context that applies one (Android adaptive foreground and
+monochrome layers, `ic_launcher_round`, the maskable PWA icon).
+`--preview` writes `design/icon-preview.png`, which shows the real generated
+files under each of those masks.
 
 ## Releasing
 
