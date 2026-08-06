@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
-const ARMED_MS = 2500;
+const ARMED_MS = 5000;
 
 export function useTwoStepAction(
   onConfirm: () => void,
