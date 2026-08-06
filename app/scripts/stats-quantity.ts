@@ -21,7 +21,13 @@ import {
   summarizeItems,
   unitCount,
 } from '../src/services/stats';
-import { itemCountLabel, totalWeightGrams, totalsByCurrency } from '../src/ui/lib/format';
+import {
+  itemCountLabel,
+  lineValueDisplay,
+  lineWeightDisplay,
+  totalWeightGrams,
+  totalsByCurrency,
+} from '../src/ui/lib/format';
 import type { InventorySnapshot, Item } from '../src/types';
 
 /** convert() reads its rate table from localStorage; node has none of its own. */
@@ -42,6 +48,14 @@ function eq(name: string, actual: unknown, expected: unknown): void {
   checks += 1;
   if (!Object.is(actual, expected)) {
     failures.push(`${name}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
+/** Currency symbols and separators are locale-dependent; the digits are not. */
+function has(name: string, actual: string | null | undefined, needle: string): void {
+  checks += 1;
+  if (!actual || !actual.includes(needle)) {
+    failures.push(`${name}: expected ${JSON.stringify(actual)} to contain ${JSON.stringify(needle)}`);
   }
 }
 
@@ -168,6 +182,36 @@ near(
 eq('one unit per item reads as items only', itemCountLabel(3, 3), '3 items');
 eq('more units than items reads as both', itemCountLabel(3, 9), '3 items (9 units)');
 eq('a single item still reads naturally', itemCountLabel(1, 1), '1 item');
+
+/* ------------------------------------------------------------- row displays */
+
+// A card or list row is read as "what is this line worth", so it leads with the
+// line total; the unit price trails it and the conversion follows the total.
+const laptopValueRow = lineValueDisplay(threeLaptops, 'EUR');
+has('row leads with the line total', laptopValueRow?.total, '2,550');
+has('row keeps the unit price as a hint', laptopValueRow?.perUnit, '850');
+has('the unit price hint says it is per unit', laptopValueRow?.perUnit, 'each');
+has('the conversion converts the total, not the unit price', laptopValueRow?.conversion, '5,100');
+eq('the row knows how many units it stands for', laptopValueRow?.units, 3);
+
+const singleLaptop = item({
+  id: 'item000004',
+  quantity: 1,
+  valueCurrent: { amount: 850, currency: 'USD' },
+});
+const singleRow = lineValueDisplay(singleLaptop, 'USD');
+has('a one-unit row still shows its value', singleRow?.total, '850');
+eq('a one-unit row has nothing to say per unit', singleRow?.perUnit, null);
+eq('a one-unit row in the main currency needs no conversion', singleRow?.conversion, null);
+eq('an unpriced row has no money to show', lineValueDisplay(item({ id: 'y', quantity: 3 }), 'USD'), null);
+
+eq('row weight leads with the line total', lineWeightDisplay(threeLaptops).total, '4.50 kg');
+eq('row weight keeps the unit weight', lineWeightDisplay(threeLaptops).perUnit, '1.50 kg each');
+eq('an estimated line weight stays marked', lineWeightDisplay(twoCrates).total, '~40.0 kg');
+eq('an estimated unit weight keeps its class', lineWeightDisplay(twoCrates).perUnit, '> 20 kg each');
+eq('a one-unit row shows its own weight', lineWeightDisplay(singleLaptop).total, '1.00 kg');
+eq('a one-unit row has nothing to say per unit (weight)',
+  lineWeightDisplay(singleLaptop).perUnit, null);
 
 /* ------------------------------------------------------- spreadsheet totals */
 

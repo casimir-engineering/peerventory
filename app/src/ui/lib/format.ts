@@ -90,6 +90,51 @@ export function convertedMoneyHint(
   return amount === null ? null : `≈ ${formatAmount(amount, mainCurrency)}`;
 }
 
+export interface LineValueDisplay {
+  /** What the whole line is worth: per-unit value × units. */
+  total: string;
+  /** Main-currency equivalent of that total, e.g. "≈ CHF 40.45". */
+  conversion: string | null;
+  /** "$10 each", only when the sheet stands for more than one unit. */
+  perUnit: string | null;
+  units: number;
+}
+
+/**
+ * How a row shows an item's money. A row in a list is read as "what is this
+ * line worth", so the line total leads and the unit price follows as a hint.
+ * The item sheet is the exception: it describes one object and stays per unit.
+ */
+export function lineValueDisplay(
+  item: Item,
+  mainCurrency: string | undefined,
+  field: 'valueCurrent' | 'valueNew' = 'valueCurrent',
+): LineValueDisplay | null {
+  const total = services.itemValueTotal(item, field);
+  if (!total) return null;
+  const units = services.unitCount(item);
+  return {
+    units,
+    total: formatMoney(total),
+    // The conversion follows the figure it sits under, so it converts the total.
+    conversion: convertedMoneyHint(total, mainCurrency),
+    perUnit: units > 1 ? `${formatMoney(item[field])} each` : null,
+  };
+}
+
+/** The weight counterpart of {@link lineValueDisplay}: whole line, then per unit. */
+export function lineWeightDisplay(item: Item): { total: string; perUnit: string | null } {
+  const perUnitLabel = weightLabel(item.weight);
+  const total = services.itemWeightGrams(item);
+  if (services.unitCount(item) < 2 || total.grams <= 0) {
+    return { total: perUnitLabel, perUnit: null };
+  }
+  return {
+    total: `${total.estimated ? '~' : ''}${formatGrams(total.grams)}`,
+    perUnit: `${perUnitLabel} each`,
+  };
+}
+
 /** Values may mix currencies; totals are kept per currency rather than converted. */
 export function totalsByCurrency(
   items: Item[],

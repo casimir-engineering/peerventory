@@ -5,7 +5,7 @@ import * as services from '../../services';
 import { getDeviceId, snapshotInventory, useInventories } from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
 import type { Id, InventoryHandle, InventorySnapshot, Item } from '../../types';
-import { formatAmount, formatMoney, itemCountLabel } from '../lib/format';
+import { formatAmount, itemCountLabel, lineValueDisplay } from '../lib/format';
 import { AppHeader } from '../components/AppHeader';
 import { NameModal } from '../components/AccountModals';
 import { EmptyState, SectionTitle } from '../components/Common';
@@ -160,13 +160,15 @@ function SearchResultRow({ result }: { result: SearchResult }) {
   const { docId, inventoryName, item } = result;
   const cover = item.photos?.[0]?.hash ?? null;
   const location = lastLocationLabel(item);
-  // The value describes one object, so it stays per unit; a multi-unit item
-  // also gets its line total, which is the number that lands in the totals.
+  // A result is a line in a list, so it is worth its line total; the unit
+  // price trails it. Results span inventories, so there is no main currency
+  // to convert into here.
   const units = services.unitCount(item);
-  const lineTotal = units > 1 ? services.itemValueTotal(item) : null;
-  const money = item.valueCurrent
-    ? formatMoney(item.valueCurrent) +
-      (lineTotal ? ` × ${units} = ${formatAmount(lineTotal.amount, lineTotal.currency)}` : '')
+  const value = lineValueDisplay(item, undefined);
+  const money = value
+    ? value.perUnit
+      ? `${value.total} (${value.perUnit})`
+      : value.total
     : units > 1
       ? `× ${units}`
       : null;

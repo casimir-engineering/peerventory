@@ -19,7 +19,7 @@
 import { chromium } from 'playwright';
 
 const APP = process.env.APP_ORIGIN ?? 'http://localhost:5203';
-const ARMED_MS = 2500;
+const ARMED_MS = 5000;
 
 let failures = 0;
 function check(name, cond, detail = '') {

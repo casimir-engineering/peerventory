@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { itemValueTotal, itemWeightGrams, unitCount } from '../../services';
+import { unitCount } from '../../services';
 import { useInventory } from '../../store';
 import type { UseInventoryResult } from '../../store/contract';
-import type { Box, Item, MoneyValue, SavedList } from '../../types';
+import type { Box, Item, SavedList } from '../../types';
 import { AppHeader } from '../components/AppHeader';
 import { EmptyState, LoadingPage, SectionTitle, SyncingState } from '../components/Common';
 import { ExportButtons } from '../components/ExportButtons';
@@ -14,16 +14,15 @@ import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
 import {
   anyWeightEstimated,
-  convertedMoneyHint,
   convertTotalsToCurrency,
   formatAmount,
   formatGrams,
-  formatMoney,
   formatTotals,
+  lineValueDisplay,
+  lineWeightDisplay,
   sizeLabel,
   totalWeightGrams,
   totalsByCurrency,
-  weightLabel,
 } from '../lib/format';
 import { parseDotIds } from '../lib/links';
 import type { LinkTarget } from '../lib/links';
@@ -246,17 +245,12 @@ export function ListViewPage() {
                       </td>
                       <td className="num">{unitCount(item)}</td>
                       <td>
-                        {weightLabel(item.weight)}
-                        <LineTotalHint item={item} kind="weight" />
+                        <LineWeight item={item} />
                       </td>
                       <td>{sizeLabel(item.dimensions)}</td>
                       <td>{boxLabel(item.boxId)}</td>
                       <td className="num">
-                        <MoneyWithConversion
-                          value={item.valueCurrent}
-                          mainCurrency={mainCurrency}
-                        />
-                        <LineTotalHint item={item} kind="value" />
+                        <LineValue item={item} mainCurrency={mainCurrency} />
                       </td>
                     </tr>
                   ))}
@@ -333,44 +327,28 @@ export function ListViewPage() {
 }
 
 /**
- * Per-unit figures describe the object, which is what a manifest row is for.
- * When one row stands for several units, the line total is what feeds the
- * totals at the top, so it is spelled out rather than left to the reader.
+ * A manifest row stands for a whole line, and the line total is what feeds the
+ * totals at the top, so it leads. The per-unit figure — the one that describes
+ * the object itself — trails it, next to the Qty column that explains it.
  */
-function LineTotalHint({ item, kind }: { item: Item; kind: 'value' | 'weight' }) {
-  const units = unitCount(item);
-  if (units < 2) return null;
-  if (kind === 'weight') {
-    const total = itemWeightGrams(item);
-    if (total.grams <= 0) return null;
-    return (
-      <div className="conversion-hint">
-        × {units} = {total.estimated ? '~' : ''}
-        {formatGrams(total.grams)}
-      </div>
-    );
-  }
-  const total = itemValueTotal(item);
-  if (!total) return null;
+function LineValue({ item, mainCurrency }: { item: Item; mainCurrency: string }) {
+  const value = lineValueDisplay(item, mainCurrency);
+  if (!value) return <>—</>;
   return (
-    <div className="conversion-hint">
-      × {units} = {formatAmount(total.amount, total.currency)}
-    </div>
+    <>
+      <div>{value.total}</div>
+      {value.conversion ? <div className="conversion-hint">{value.conversion}</div> : null}
+      {value.perUnit ? <div className="conversion-hint">{value.perUnit}</div> : null}
+    </>
   );
 }
 
-function MoneyWithConversion({
-  value,
-  mainCurrency,
-}: {
-  value: MoneyValue | undefined;
-  mainCurrency: string;
-}) {
-  const hint = convertedMoneyHint(value, mainCurrency);
+function LineWeight({ item }: { item: Item }) {
+  const weight = lineWeightDisplay(item);
   return (
     <>
-      <div>{formatMoney(value)}</div>
-      {hint ? <div className="conversion-hint">{hint}</div> : null}
+      <div>{weight.total}</div>
+      {weight.perUnit ? <div className="conversion-hint">{weight.perUnit}</div> : null}
     </>
   );
 }

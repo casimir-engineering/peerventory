@@ -13,13 +13,7 @@ import { PhotoImage } from '../components/Photos';
 import { ShareModal } from '../components/ShareModal';
 import { useToast } from '../components/Toast';
 import { TwoStepDeleteButton } from '../components/TwoStepDelete';
-import {
-  convertedMoneyHint,
-  formatMoney,
-  itemCountLabel,
-  itemMatchesQuery,
-  weightLabel,
-} from '../lib/format';
+import { itemCountLabel, itemMatchesQuery, lineValueDisplay, weightLabel } from '../lib/format';
 import { buildShareUrl, selectionNeedsSavedList } from '../lib/links';
 import type { LinkTarget } from '../lib/links';
 import { registerNavigationGuard } from '../lib/navGuard';
@@ -565,7 +559,8 @@ function ItemCard({
   onLongPress: () => void;
 }) {
   const cover = item.photos?.[0]?.hash ?? null;
-  const conversionHint = convertedMoneyHint(item.valueCurrent, mainCurrency);
+  // The card is a line in a list, so its money is what the line is worth.
+  const value = lineValueDisplay(item, mainCurrency);
   const timer = useRef<number | null>(null);
   const origin = useRef({ x: 0, y: 0 });
   // A long press ends in a click too; that click would undo the selection the
@@ -642,11 +637,16 @@ function ItemCard({
           {item.quantity > 1 ? <span className="chip accent">×{item.quantity}</span> : null}
           <span className="chip">{weightLabel(item.weight)}</span>
           {boxLabel ? <span className="chip">{boxLabel}</span> : null}
-          {item.valueCurrent ? (
-            <span>
-              {formatMoney(item.valueCurrent)}
-              {conversionHint ? <span className="conversion-hint"> {conversionHint}</span> : null}
-            </span>
+          {value ? (
+            <>
+              <span>
+                {value.total}
+                {value.conversion ? (
+                  <span className="conversion-hint"> {value.conversion}</span>
+                ) : null}
+              </span>
+              {value.perUnit ? <span className="conversion-hint">{value.perUnit}</span> : null}
+            </>
           ) : null}
         </span>
       </div>
