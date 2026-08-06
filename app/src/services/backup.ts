@@ -5,14 +5,20 @@
  * access to everything on this device.
  *
  * Payload v2 = base64url(JSON): { v:2, n?:name, oi?:ownerId, a?:aliases,
- * c?:lastCurrency, k?:aiKey, p?:profileDoc, h:[{ d, rw?, ro?, ek?, nm? }] }
+ * c?:lastCurrency, k?:aiKey, p?:profileDoc, rl?:relayOrigins,
+ * h:[{ d, rw?, ro?, ek?, nm? }] }
  * where `ek` is the per-inventory content encryption key of end-to-end
  * encrypted docs and `oi` is the stable owner id of this user (so a restored
  * device keeps the same owner identity). `p` = { d, rw?, ro?, ek } is the
  * handle of the SYNCED PROFILE DOC (see store/profileSync.ts): importing it
  * links the devices permanently — inventories created later flow through
- * profile sync instead of needing a fresh backup. v1 payloads (no keys) and
- * v2 payloads without `oi`/`p` are still accepted and import statically.
+ * profile sync instead of needing a fresh backup. `rl` is the exporting
+ * device's enabled relay list: the importer adds those relays and can fetch
+ * the profile doc from ANY of them, so the payload works no matter which
+ * URL wrapped it — the wrapper origin is browser-open convenience, not "the"
+ * server. v1 payloads (no keys) and v2 payloads without `oi`/`p`/`rl` are
+ * still accepted (and fall back to the wrapper origin as the relay hint,
+ * as before).
  *
  * TWO FLAVOURS of the same v2 payload:
  * - LINK TOKEN (encodeLinkToken): identity + `p` only, `h` empty. This is what
@@ -30,7 +36,9 @@
  */
 
 import {
+  addRelay,
   adoptProfileHandle,
+  enabledRelayOrigins,
   getHandlesSnapshot,
   getStoredHandle,
   importHandles,
@@ -76,6 +84,13 @@ export interface DecodedBackup {
    * from then on. Absent in old backups (which import statically).
    */
   profile?: { docId: string; rwToken?: string; roToken?: string; key?: string };
+  /**
+   * Relay origins the exporting device syncs through. The importer adds them
+   * to its relay set so the profile doc (and everything behind it) can be
+   * fetched from any of them — the payload works regardless of which URL
+   * wrapped it. Absent in old payloads (wrapper origin stays the only hint).
+   */
+  relays?: string[];
   handles: BackupHandle[];
 }
 
@@ -87,7 +102,19 @@ interface WirePayload {
   c?: string;
   k?: string;
   p?: { d: string; rw?: string; ro?: string; ek?: string };
+  rl?: string[];
   h: Array<{ d: string; rw?: string; ro?: string; ek?: string; nm?: string }>;
+}
+
+/**
+ * Keeps the on-screen QR readable: each origin costs ~20-30 bytes, and the
+ * account relay list is realistically 1-3 entries anyway.
+ */
+const MAX_PAYLOAD_RELAYS = 4;
+
+function relaysWire(): string[] | undefined {
+  const origins = enabledRelayOrigins().slice(0, MAX_PAYLOAD_RELAYS);
+  return origins.length > 0 ? origins : undefined;
 }
 
 function toBase64Url(json: string): string {
@@ -122,9 +149,10 @@ function profileWire(): WirePayload['p'] | undefined {
 
 /**
  * "Join my account" token: identity + the profile-doc handle, nothing else.
- * Small enough (~230 bytes, QR version 12) to be read off a phone screen by
- * another phone's camera, and complete enough that the joining device
- * receives every inventory through profile sync moments later.
+ * Small enough (~250-350 bytes with the relay list, QR version 12-15) to be
+ * read off a phone screen by another phone's camera, and complete enough
+ * that the joining device receives every inventory through profile sync
+ * moments later — from whichever of the listed relays answers first.
  */
 export function encodeLinkToken(): string {
   // `h: []` rather than a new payload version on purpose: builds that predate
@@ -135,6 +163,8 @@ export function encodeLinkToken(): string {
   wire.oi = getOwnerId();
   const p = profileWire();
   if (p) wire.p = p;
+  const rl = relaysWire();
+  if (rl) wire.rl = rl;
   return toBase64Url(JSON.stringify(wire));
 }
 
@@ -157,6 +187,8 @@ export function encodeBackup(): string {
   // importing device joins the synced inventory list instead of copying it.
   const prof = profileWire();
   if (prof) wire.p = prof;
+  const rl = relaysWire();
+  if (rl) wire.rl = rl;
   const aliases = getOwnerAliases();
   if (Object.keys(aliases).length > 0) wire.a = aliases;
   const currency = getLastCurrency();
@@ -198,6 +230,9 @@ export function decodeBackup(payload: string): DecodedBackup | null {
               key: typeof wire.p.ek === 'string' ? wire.p.ek : undefined,
             }
           : undefined,
+      relays: Array.isArray(wire.rl)
+        ? wire.rl.filter((r): r is string => typeof r === 'string' && r.length > 0)
+        : undefined,
       handles: handles
         .filter((h) => typeof h?.d === 'string' && h.d)
         .map((h) => ({
@@ -258,7 +293,12 @@ export function isLinkToken(backup: DecodedBackup): boolean {
  * handle merging never downgrades access (see importHandles).
  */
 export function importBackup(backup: DecodedBackup): ImportBackupResult {
-  // Identity first: docs (re)opened during the handle import below record
+  // Relays first: the profile-doc fetch below must be able to reach ANY of
+  // the exporter's relays, not just whatever origin wrapped the payload.
+  // addRelay normalizes, dedupes and records the account-level add intent.
+  for (const origin of backup.relays ?? []) addRelay(origin);
+
+  // Identity next: docs (re)opened during the handle import below record
   // the user in the owners directory, which needs ownerId/name in place.
   if (backup.ownerId && !getStoredOwnerId()) setOwnerId(backup.ownerId);
   let nameApplied = false;

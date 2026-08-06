@@ -92,6 +92,49 @@ replication happens through clients.
   carry `rl: string[]` (union-merged, add-only), so relay hints propagate
   across a user's devices.
 
+## Relay data lifecycle (lease GC + explicit delete)
+
+A relay must be nothing but an interchangeable, disposable mailbox — so it
+must also be able to EMPTY itself. It is blind (ciphertext only) and cannot
+see tombstones or "this inventory was forgotten"; deletion therefore works
+two ways:
+
+- LEASE GC (server, automatic): every authenticated access renews a per-doc
+  lease — a successful sync authentication (`onAuthenticate`) and any
+  authorized blob GET/PUT/HEAD stamp `doc_meta.last_access_at`. Writes are
+  throttled to once per day per doc (a conditional UPDATE; retention is
+  measured in months, day-granularity is plenty). A daily sweep deletes every
+  doc whose lease is older than the retention window: its Yjs state
+  (`documents` row), its token record (`doc_meta`, cascading `blob_refs`) and
+  its blob files — except files still referenced by another doc (blobs are
+  content-addressed and globally deduped). Retention comes from env
+  `RETENTION_DAYS` (default 180; `0` disables GC entirely). Docs from before
+  the lease column (NULL `last_access_at`) are stamped "now" by the first
+  sweep instead of being deleted — a fresh deploy never mass-deletes. The
+  sweep logs COUNTS only, never doc ids. Consequence for clients: a relay
+  holds data only for docs some device still syncs; if all peers forget a doc
+  (or die), the relay forgets it too after the window.
+- EXPLICIT DELETE (server): `DELETE /api/docs/:docId` with header
+  `x-token: <rwToken>`. 401 without a token; 403 when the doc exists and the
+  token is not its rw token; 204 on success AND for unknown docs, so the call
+  is idempotent (a retry after a success, whose token record is already gone,
+  is still 204). Deletes the same three things as the sweep, immediately, and
+  closes the doc's live sync connections first. A debounced Hocuspocus store
+  racing the delete can at most leave an orphan `documents` row with no token
+  record — unusable (nothing authenticates against a doc without meta) and
+  removed by the next sweep.
+- APP FLOW: the forget-inventory confirmation offers "Also delete from my
+  relays" for inventories the account OWNS (`owned` flag; needs the rw
+  token) — default ON, hidden for joined/shared inventories. After local
+  removal the app fires the DELETE on every relay recorded on the handle,
+  best-effort in parallel (`store/remoteDelete.ts`): failures (offline
+  relays) are surfaced in a toast and otherwise left to that relay's lease
+  GC. "Leave account on this device" NEVER deletes relay data — other
+  devices depend on it; only the explicit forget-with-checkbox does.
+  Re-registration after deletion stays possible by design: a client holding
+  BOTH tokens can re-create the doc via the create-handshake (same as
+  introducing it to a brand-new relay).
+
 ## Direct device-to-device sync (WebRTC)
 
 Devices holding the same inventory sync directly (LAN or NAT-permitting)
@@ -287,14 +330,20 @@ Design alternatives considered (decision record):
   cannot decrypt: the UI shows "Encryption key missing" until a full link or
   QR code delivers the key.
 - Backup payload v2: handle entries carry `ek` (content key) and the payload
-  carries `oi` (the user's stable owner id, see "Owner identity") and `p`
-  (the synced-profile doc handle, see "Synced profile"); v1 payloads (no
-  keys) and payloads without `oi`/`p` are still accepted on restore.
+  carries `oi` (the user's stable owner id, see "Owner identity"), `p`
+  (the synced-profile doc handle, see "Synced profile") and `rl` (the
+  exporting device's enabled relay origins, capped at 4). `rl` makes the
+  payload RELAY-INDEPENDENT: the importer adds those relays to its set and
+  fetches the profile doc from whichever answers — the URL that wrapped the
+  QR is browser-open convenience plus one more hint, never "the" server.
+  v1 payloads (no keys) and payloads without `oi`/`p`/`rl` are still
+  accepted on restore (the wrapper origin stays the only hint, as before).
 - Two flavours of that same v2 payload share the `#/restore/<payload>` route:
-  - DEVICE LINK TOKEN (`encodeLinkToken`, `h: []`): identity + `p` only,
-    ~225 bytes of payload / ~275 bytes of URL = QR version 12. This is what
-    the app renders on screen. Everything else reaches the joining device
-    through profile-doc sync.
+  - DEVICE LINK TOKEN (`encodeLinkToken`, `h: []`): identity + `p` + `rl`,
+    ~250-350 bytes of payload / ~280-380 bytes of URL = QR version 12-15
+    (~330 B payload with three listed relays). This is what the app renders
+    on screen. Everything else reaches the joining device through
+    profile-doc sync.
   - FULL BACKUP (`encodeBackup`): every handle as well. A five-inventory
     profile is ~1.2 kB of URL = QR version 29 (133x133 modules), which a
     camera cannot read off another phone's screen, and past ~11 inventories
@@ -338,6 +387,11 @@ server never sees image contents or the real mime type.
 - `GET /api/blobs/:docId/:hash` — header `x-token: <rwToken or roToken>`. Returns bytes with stored content-type.
 - `HEAD` same as GET without body (used by upload queue to skip existing).
 - Max blob size: 10 MB. Anything else: 413.
+- Every authorized blob request renews the doc's GC lease (see "Relay data
+  lifecycle").
+- `DELETE /api/docs/:docId` — header `x-token: <rwToken>`; removes the doc,
+  its token record and its blobs immediately (idempotent 204, see "Relay
+  data lifecycle").
 
 ## Share links (client-side routing, hash router)
 
@@ -348,6 +402,15 @@ server never sees image contents or the real mime type.
   missing") until the key arrives.
 - Item: `https://<host>/#/join/<docId>/<token>/k/<key>/i/<itemId>`
 - Item list: `https://<host>/#/join/<docId>/<token>/k/<key>/l/<id1>.<id2>.<id3>` (dot-joined item IDs; UI offers "save as list" for long selections, which shares `#/join/<docId>/<token>/k/<key>/sl/<listId>` instead).
+- RELAY HINTS (`?r=`): new links append the doc's OTHER relays as a query
+  string INSIDE the fragment — `...#/join/.../k/<key>[/i/...]?r=<o1>,<o2>`
+  (max 3, wrapper origin excluded; `https://` prefixes dropped when they
+  round-trip, LAN/`http://` origins verbatim; ~20-30 bytes per origin, a
+  typical link stays ≈150 B / QR version 8). The joiner records the wrapper
+  origin AND every `?r=` origin as relay hints on the handle, so the link
+  keeps working when the wrapper relay is gone. Backward and forward
+  compatible by construction: old builds' hash router matches the same route
+  and ignores the query; links without `?r=` parse as before.
 - Already-joined shortcuts (no token): `#/inv/<docId>`, `#/inv/<docId>/i/<itemId>`, `#/inv/<docId>/l/...`, `#/inv/<docId>/sl/<listId>`.
 
 ## Client server-config

@@ -7,11 +7,17 @@ import { Server } from "@hocuspocus/server";
 
 import type { AiRuntimeOptions } from "./ai.js";
 import { applyAccessToConnection, type AccessLevel } from "./auth.js";
+import { sweepStaleDocs, type SweepResult } from "./gc.js";
 import { createHttpApp } from "./http.js";
 import { SignalingService } from "./signaling.js";
 import { MetadataStore } from "./storage.js";
 
 const SERVER_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RETENTION_DAYS = 180;
+/** First sweep shortly after boot (lets the deploy log confirm the pass). */
+const SWEEP_STARTUP_DELAY_MS = 60_000;
 
 export interface InventoryServerOptions {
   ai?: AiRuntimeOptions;
@@ -21,12 +27,19 @@ export interface InventoryServerOptions {
   quiet?: boolean;
   handleSignals?: boolean;
   logger?: Pick<Console, "info" | "error">;
+  /**
+   * Lease retention window for the GC sweep (see gc.ts); 0 disables
+   * garbage collection entirely. Defaults to env RETENTION_DAYS, then 180.
+   */
+  retentionDays?: number;
 }
 
 export interface RunningInventoryServer {
   port: number;
   metadata: MetadataStore;
   signaling: SignalingService;
+  /** Run one GC pass now (tests / operator tooling). */
+  sweep(now?: number): Promise<SweepResult>;
   close(): Promise<void>;
 }
 
@@ -47,6 +60,22 @@ function configuredPort(explicitPort: number | undefined): number {
   return port;
 }
 
+function configuredRetentionDays(explicit: number | undefined): number {
+  if (explicit !== undefined) {
+    return explicit;
+  }
+
+  const value = process.env.RETENTION_DAYS;
+  if (value === undefined || value === "") {
+    return DEFAULT_RETENTION_DAYS;
+  }
+  const days = Number(value);
+  if (!Number.isFinite(days) || days < 0) {
+    throw new Error(`Invalid RETENTION_DAYS: ${value}`);
+  }
+  return days;
+}
+
 export async function startInventoryServer(
   options: InventoryServerOptions = {},
 ): Promise<RunningInventoryServer> {
@@ -65,10 +94,19 @@ export async function startInventoryServer(
   const metadata = new MetadataStore(databasePath);
   const signaling = new SignalingService();
   const sqlite = new SQLite({ database: databasePath });
+  const retentionDays = configuredRetentionDays(options.retentionDays);
+  const closeDocConnections = (docId: string): void => {
+    try {
+      server.hocuspocus.closeConnections(docId);
+    } catch {
+      // server still starting up or already shut down — nothing to close
+    }
+  };
   const app = createHttpApp({
     ai: { ...options.ai, logger: options.ai?.logger ?? logger },
     blobDir,
     metadata,
+    onDocDeleted: closeDocConnections,
     serveStatic: existsSync(join(staticDir, "index.html")),
     staticDir,
   });
@@ -110,6 +148,8 @@ export async function startInventoryServer(
         throw { code: 4403, reason: "Forbidden" };
       }
 
+      // Any authenticated sync connection renews the doc's GC lease.
+      metadata.touchDoc(documentName);
       applyAccessToConnection(level, connectionConfig);
       return { access: level };
     },
@@ -117,11 +157,38 @@ export async function startInventoryServer(
 
   await server.listen();
 
+  const sweep = (now?: number): Promise<SweepResult> =>
+    sweepStaleDocs({
+      metadata,
+      blobDir,
+      retentionMs: retentionDays * DAY_MS,
+      now,
+      logger,
+      onDocDeleted: closeDocConnections,
+    });
+
+  let sweepStartupTimer: NodeJS.Timeout | undefined;
+  let sweepTimer: NodeJS.Timeout | undefined;
+  if (retentionDays > 0) {
+    logger.info(`[gc] lease retention: ${retentionDays} days, daily sweep`);
+    const run = () => {
+      sweep().catch((error: unknown) => logger.error("[gc] sweep failed", error));
+    };
+    sweepStartupTimer = setTimeout(run, SWEEP_STARTUP_DELAY_MS);
+    sweepStartupTimer.unref?.();
+    sweepTimer = setInterval(run, DAY_MS);
+    sweepTimer.unref?.();
+  } else {
+    logger.info("[gc] disabled (RETENTION_DAYS=0)");
+  }
+
   let closePromise: Promise<void> | undefined;
   const close = (): Promise<void> => {
     closePromise ??= (async () => {
       process.off("SIGINT", signalHandler);
       process.off("SIGTERM", signalHandler);
+      clearTimeout(sweepStartupTimer);
+      clearInterval(sweepTimer);
       signaling.close();
       await server.destroy();
       sqlite.db?.close();
@@ -147,6 +214,7 @@ export async function startInventoryServer(
     port: server.address.port,
     metadata,
     signaling,
+    sweep,
     close,
   };
 }

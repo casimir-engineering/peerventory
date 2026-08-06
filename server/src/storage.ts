@@ -21,6 +21,14 @@ interface BlobReferenceRow {
   mime: string;
 }
 
+/**
+ * Lease writes are throttled: a doc's last_access_at is only bumped when the
+ * stored stamp is older than this. Retention windows are measured in months,
+ * so day-granularity is plenty and keeps the hot path to one cheap
+ * conditional UPDATE per access.
+ */
+export const LEASE_THROTTLE_MS = 24 * 60 * 60 * 1000;
+
 export class MetadataStore {
   private readonly db: Database.Database;
 
@@ -29,6 +37,16 @@ export class MetadataStore {
   private readonly readBlobReference;
   private readonly upsertBlobReference;
   private readonly createMetaTransaction;
+  private readonly touchLease;
+  private readonly stampNullLeases;
+  private readonly readLease;
+  private readonly writeLease;
+  private readonly selectStaleDocs;
+  private readonly selectDocBlobHashes;
+  private readonly countBlobRefs;
+  private readonly deleteMeta;
+  private readonly deleteDocumentRow;
+  private readonly deleteOrphanRows;
 
   constructor(databasePath: string) {
     this.db = new Database(databasePath);
@@ -48,6 +66,25 @@ export class MetadataStore {
         PRIMARY KEY (doc_id, hash),
         FOREIGN KEY (doc_id) REFERENCES doc_meta(doc_id) ON DELETE CASCADE
       );
+    `);
+    // Lease column for garbage collection (see gc.ts). Added with ALTER so
+    // existing deployments migrate in place; NULL means "never stamped",
+    // which the first sweep converts to "now" (no surprise mass deletion).
+    const columns = this.db
+      .prepare("SELECT name FROM pragma_table_info('doc_meta')")
+      .all() as Array<{ name: string }>;
+    if (!columns.some((c) => c.name === "last_access_at")) {
+      this.db.exec("ALTER TABLE doc_meta ADD COLUMN last_access_at INTEGER");
+    }
+    // The Hocuspocus SQLite extension owns this table (same database file);
+    // created defensively with the identical schema so the delete statements
+    // below work even before the extension has connected.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS "documents" (
+        "name" varchar(255) NOT NULL,
+        "data" blob NOT NULL,
+        UNIQUE(name)
+      )
     `);
 
     this.readMeta = this.db.prepare(
@@ -76,6 +113,38 @@ export class MetadataStore {
         return stored;
       },
     );
+    this.touchLease = this.db.prepare(`
+      UPDATE doc_meta SET last_access_at = @now
+      WHERE doc_id = @docId
+        AND (last_access_at IS NULL OR last_access_at <= @cutoff)
+    `);
+    this.stampNullLeases = this.db.prepare(
+      "UPDATE doc_meta SET last_access_at = ? WHERE last_access_at IS NULL",
+    );
+    this.readLease = this.db.prepare(
+      "SELECT last_access_at FROM doc_meta WHERE doc_id = ?",
+    );
+    this.writeLease = this.db.prepare(
+      "UPDATE doc_meta SET last_access_at = ? WHERE doc_id = ?",
+    );
+    this.selectStaleDocs = this.db.prepare(`
+      SELECT doc_id FROM doc_meta
+      WHERE last_access_at IS NOT NULL AND last_access_at < ?
+    `);
+    this.selectDocBlobHashes = this.db.prepare(
+      "SELECT hash FROM blob_refs WHERE doc_id = ?",
+    );
+    this.countBlobRefs = this.db.prepare(
+      "SELECT COUNT(*) AS n FROM blob_refs WHERE hash = ?",
+    );
+    this.deleteMeta = this.db.prepare("DELETE FROM doc_meta WHERE doc_id = ?");
+    this.deleteDocumentRow = this.db.prepare(
+      'DELETE FROM "documents" WHERE name = ?',
+    );
+    this.deleteOrphanRows = this.db.prepare(`
+      DELETE FROM "documents"
+      WHERE name NOT IN (SELECT doc_id FROM doc_meta)
+    `);
   }
 
   getDocMeta(docId: string): DocMeta | null {
@@ -108,6 +177,70 @@ export class MetadataStore {
 
   recordBlobReference(docId: string, hash: string, mime: string): void {
     this.upsertBlobReference.run(docId, hash, mime);
+  }
+
+  /* ---------- leases + deletion (see gc.ts for the sweep) ---------- */
+
+  /** Renew a doc's lease. Throttled: no-op while the stamp is fresh. */
+  touchDoc(docId: string, now = Date.now()): void {
+    this.touchLease.run({ docId, now, cutoff: now - LEASE_THROTTLE_MS });
+  }
+
+  /**
+   * Stamp every doc that has no lease yet (rows predating the lease column).
+   * Returns how many were stamped. Running this at the start of every sweep
+   * guarantees a fresh deploy never mass-deletes existing docs.
+   */
+  stampMissingLeases(now = Date.now()): number {
+    return this.stampNullLeases.run(now).changes;
+  }
+
+  getLease(docId: string): number | null {
+    const row = this.readLease.get(docId) as
+      | { last_access_at: number | null }
+      | undefined;
+    return row?.last_access_at ?? null;
+  }
+
+  /** Direct lease write, for tests and operator tooling only. */
+  setLease(docId: string, at: number): void {
+    this.writeLease.run(at, docId);
+  }
+
+  /** Docs whose lease is older than the cutoff (never-stamped rows excluded). */
+  listStaleDocIds(cutoff: number): string[] {
+    const rows = this.selectStaleDocs.all(cutoff) as Array<{ doc_id: string }>;
+    return rows.map((r) => r.doc_id);
+  }
+
+  getDocBlobHashes(docId: string): string[] {
+    const rows = this.selectDocBlobHashes.all(docId) as Array<{ hash: string }>;
+    return rows.map((r) => r.hash);
+  }
+
+  /** How many docs reference a blob hash (files are globally deduped). */
+  blobReferenceCount(hash: string): number {
+    return (this.countBlobRefs.get(hash) as { n: number }).n;
+  }
+
+  /**
+   * Delete a doc's token record (cascades its blob refs) and its persisted
+   * Yjs state. Returns whether the doc was known. Idempotent.
+   */
+  deleteDocRecords(docId: string): boolean {
+    const existed = this.deleteMeta.run(docId).changes > 0;
+    this.deleteDocumentRow.run(docId);
+    return existed;
+  }
+
+  /**
+   * Drop persisted Yjs state that has no token record — the debounced store
+   * of a doc deleted while clients were still connected can re-insert its
+   * row after deleteDocRecords ran. Such rows are inert (nobody can
+   * authenticate against a doc without meta), this is disk hygiene.
+   */
+  deleteOrphanDocumentRows(): number {
+    return this.deleteOrphanRows.run().changes;
   }
 
   close(): void {

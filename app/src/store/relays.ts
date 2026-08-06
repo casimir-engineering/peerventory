@@ -202,31 +202,50 @@ export function applyAccountRelays(plan: { add: string[]; remove: string[] }): v
 }
 
 /* ---------- share-link relay hints ----------
- * A share link's origin is *a* relay hint, not *the* server. The parse and
- * join steps are decoupled (the join route cannot carry an origin), so a
- * pasted/scanned link's origin is stashed here until joinInventory picks
- * it up. */
+ * A share link's origin is *a* relay hint, not *the* server, and newer links
+ * additionally embed the doc's other relays (`?r=`, see ui/lib/links.ts).
+ * The parse and join steps are decoupled (the join route cannot carry an
+ * origin), so a pasted/scanned link's origins are stashed here until
+ * joinInventory picks them up. */
 
 const hintKey = (docId: Id) => 'relayhint:' + docId;
 
 export function rememberRelayHint(docId: Id, origin: string): void {
-  const url = normalizeRelayUrl(origin);
-  if (!url) return;
+  rememberRelayHints(docId, [origin]);
+}
+
+/** Stash relay hints for a doc about to be joined (merges with any stashed). */
+export function rememberRelayHints(docId: Id, origins: string[]): void {
+  const urls = mergeRelayLists(readHints(docId), origins);
+  if (urls.length === 0) return;
   try {
-    sessionStorage.setItem(hintKey(docId), url);
+    sessionStorage.setItem(hintKey(docId), JSON.stringify(urls));
   } catch {
     /* ignore */
   }
 }
 
-export function takeRelayHint(docId: Id): string | null {
+function readHints(docId: Id): string[] {
   try {
-    const url = sessionStorage.getItem(hintKey(docId));
-    if (url) sessionStorage.removeItem(hintKey(docId));
-    return url;
+    const raw = sessionStorage.getItem(hintKey(docId));
+    if (!raw) return [];
+    // Older sessions stored a single origin string rather than a JSON array.
+    if (!raw.startsWith('[')) return [raw];
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
   } catch {
-    return null;
+    return [];
   }
+}
+
+export function takeRelayHints(docId: Id): string[] {
+  const urls = readHints(docId);
+  try {
+    sessionStorage.removeItem(hintKey(docId));
+  } catch {
+    /* ignore */
+  }
+  return urls;
 }
 
 /** Union of relay lists, normalized and deduped (order preserved). */

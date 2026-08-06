@@ -16,7 +16,7 @@ import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import * as services from '../../services';
-import { rememberRelayHint } from '../../store';
+import { rememberRelayHints } from '../../store';
 import { joinRoute, parseShareLink } from '../lib/links';
 import type { ParsedAccount, ParsedImport } from '../lib/importFile';
 import { parseImportFile } from '../lib/importFile';
@@ -84,8 +84,10 @@ export function useImportFlow(options?: {
             : 'That code is not an inventory link or device code.',
         };
       }
-      // A pasted/scanned link's origin is a relay hint the join flow records.
-      if (parsed.origin) rememberRelayHint(parsed.docId, parsed.origin);
+      // A pasted/scanned link's origin is a relay hint the join flow records,
+      // as are any further relays the link embedded (`?r=`).
+      const hints = [...(parsed.origin ? [parsed.origin] : []), ...parsed.relays];
+      if (hints.length > 0) rememberRelayHints(parsed.docId, hints);
       onHandled?.();
       navigate(joinRoute(parsed));
       return { ok: true };

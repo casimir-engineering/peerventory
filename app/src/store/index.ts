@@ -23,13 +23,16 @@ export { getDeviceId } from './device';
 export { ownerDisplayName } from './owners';
 export { getHandlesSnapshot, getStoredHandle, importHandles } from './registry';
 export { getRelayConns } from './docs';
+export { deleteDocFromRelays } from './remoteDelete';
 export {
   addRelay,
   defaultRelayOrigin,
+  enabledRelayOrigins,
   getRelaysSnapshot,
   normalizeRelayUrl,
   relayHttpUrl,
   rememberRelayHint,
+  rememberRelayHints,
   removeRelay,
   setRelayEnabled,
   subscribeRelays,

@@ -219,6 +219,29 @@ contract and workflow.
 - **Devices are the source of truth**: full database on every device,
   offline first; any relay can be rebuilt from any device that holds the
   documents.
+- **Relays clean up after themselves.** Every sync or photo access renews a
+  per-document lease; a daily sweep deletes whatever no device has touched
+  for the retention window (`RETENTION_DAYS`, default 180 — the relay cannot
+  read tombstones, it only stores ciphertext, so "all peers forgot this doc"
+  is expressed by silence). Forgetting an inventory you own also offers
+  "Also delete from my relays", which wipes it from every relay immediately.
+
+### The relay lifecycle: servers are disposable
+
+- **Add a relay**: run one (below), add its hostname on any device — every
+  linked device picks it up, inventories you own replicate there
+  automatically (data, photos, and the same access tokens work everywhere).
+- **Retire a relay**: remove it from the relay list; documents keep syncing
+  through the remaining relays and through direct device-to-device sync.
+  Nothing is lost — every device holds the full data. The retired box can be
+  wiped whenever; even if it stays up, its copy ages out through the lease
+  sweep once no device syncs through it anymore.
+- **Lose a relay** (disk dies, VPS expires): same as retiring it, minus the
+  ceremony. Any device that holds the documents rebuilds a fresh relay by
+  simply syncing to it.
+- Device-link QRs and share links embed the relay list, so linking a new
+  phone or opening a share link works no matter which relay's URL happens to
+  wrap the code — and keeps working after that relay is gone.
 
 ## Self-hosting a relay
 

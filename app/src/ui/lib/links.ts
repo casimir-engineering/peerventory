@@ -5,7 +5,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import type { Id, InventoryHandle } from '../../types';
-import { relayOriginsForDoc } from '../../store/relays';
+import { normalizeRelayUrl, relayOriginsForDoc } from '../../store/relays';
 
 export type LinkTarget =
   | { kind: 'inventory' }
@@ -42,6 +42,45 @@ export function appBaseUrl(): string {
   return origin + pathname.replace(/index\.html$/, '');
 }
 
+/* ---------- relay hints inside links (`?r=` in the hash fragment) ----------
+ * A share link's wrapper origin is one relay hint; newer links additionally
+ * embed the doc's OTHER relays as a query string inside the fragment
+ * (`#/join/...?r=<origin>,<origin>`), so joining keeps working even when the
+ * wrapper relay is gone. The query-inside-hash placement is deliberate: the
+ * hash router ignores it on old builds (backward compatible) and fragments
+ * never reach any server. Compact form: the `https://` prefix is dropped
+ * when it round-trips (the common case); LAN/`http://` origins stay verbatim.
+ */
+
+/** Cap keeps QR codes readable; 1-3 extra relays is the realistic case. */
+const MAX_LINK_RELAY_HINTS = 3;
+
+function compactOrigin(origin: string): string {
+  if (!origin.startsWith('https://')) return origin;
+  const bare = origin.slice('https://'.length);
+  return normalizeRelayUrl(bare) === origin ? bare : origin;
+}
+
+/** `?r=` value for the relays of a doc, excluding the wrapper origin. */
+export function encodeRelayHints(origins: string[], excludeOrigin?: string): string {
+  return origins
+    .filter((o) => o !== excludeOrigin)
+    .slice(0, MAX_LINK_RELAY_HINTS)
+    .map(compactOrigin)
+    .join(',');
+}
+
+/** Origins from a `?r=` value (normalized; junk entries dropped). */
+export function decodeRelayHints(value: string | null | undefined): string[] {
+  if (!value) return [];
+  const out: string[] = [];
+  for (const part of value.split(',')) {
+    const url = normalizeRelayUrl(part);
+    if (url && !out.includes(url)) out.push(url);
+  }
+  return out;
+}
+
 /**
  * Full share URL including a token, for people who have not joined yet.
  * For end-to-end encrypted inventories the content key rides along as
@@ -50,13 +89,17 @@ export function appBaseUrl(): string {
  *
  * The link is based on one of the relays the DOC lives on (each relay also
  * serves the app), so the receiver both loads the app and gets a valid relay
- * hint even when their default relay differs from ours.
+ * hint even when their default relay differs from ours; the doc's remaining
+ * relays ride along as `?r=` hints (see above).
  */
 export function buildShareUrl(docId: Id, token: string, target: LinkTarget, key?: string): string {
   const keyPart = key ? `/k/${key}` : '';
-  const docRelay = relayOriginsForDoc(docId)[0];
+  const relays = relayOriginsForDoc(docId);
+  const docRelay = relays[0];
   const base = docRelay ? docRelay + '/' : appBaseUrl();
-  return `${base}#/join/${docId}/${token}${keyPart}${targetSuffix(target)}`;
+  const hints = encodeRelayHints(relays, docRelay);
+  const hintPart = hints ? `?r=${hints}` : '';
+  return `${base}#/join/${docId}/${token}${keyPart}${targetSuffix(target)}${hintPart}`;
 }
 
 /** Device-backup restore link (identity + all inventory tokens). */
@@ -91,15 +134,19 @@ export interface ParsedShareLink {
   /**
    * http(s) origin the link pointed at, when the input carried one. It is a
    * RELAY HINT (a relay the doc is known to live on), not "the" server —
-   * callers stash it via rememberRelayHint() so the join flow records it.
+   * callers stash it via rememberRelayHints() so the join flow records it.
    */
   origin?: string;
+  /** Further relay hints the link embedded (`?r=`), normalized origins. */
+  relays: string[];
 }
 
 const JOIN_RE =
   /\/join\/([^/\s#?]+)\/([^/\s#?]+)(?:\/k\/([A-Za-z0-9_-]+))?((?:\/(?:i|l|sl)\/[^/\s#?]+)?)/;
 
 const ORIGIN_RE = /^(https?:\/\/[^/#?\s]+)/i;
+
+const RELAY_HINTS_RE = /[?&]r=([^&\s#]+)/;
 
 /**
  * Accepts a full share URL, a bare `#/join/...` fragment, or a `/join/...` path.
@@ -117,6 +164,7 @@ export function parseShareLink(input: string): ParsedShareLink | null {
     key: key || undefined,
     suffix: suffix ?? '',
     origin: origin || undefined,
+    relays: decodeRelayHints(RELAY_HINTS_RE.exec(trimmed)?.[1]),
   };
 }
 

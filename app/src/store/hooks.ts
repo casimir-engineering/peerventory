@@ -58,7 +58,7 @@ import {
   defaultRelayOrigin,
   enabledRelayOrigins,
   mergeRelayLists,
-  takeRelayHint,
+  takeRelayHints,
 } from './relays';
 import {
   getHandlesSnapshot,
@@ -136,12 +136,14 @@ async function joinInventory(docId: Id, token: string, key?: string): Promise<In
 
 async function joinInventoryImpl(docId: Id, token: string, key?: string): Promise<InventoryHandle> {
   const contentKey = key && isValidContentKey(key) ? key : undefined;
-  // The origin the share link pointed at is a relay hint for this doc; a link
-  // parsed without an explicit origin falls back to the device default.
-  const relayHint = takeRelayHint(docId) ?? defaultRelayOrigin();
+  // The origins the share link pointed at (wrapper origin + any relays the
+  // link embedded) are relay hints for this doc; a link parsed without any
+  // falls back to the device default.
+  const stashed = takeRelayHints(docId);
+  const relayHints = stashed.length > 0 ? stashed : [defaultRelayOrigin()];
   const existing = getStoredHandle(docId);
   if (existing) {
-    const relays = mergeRelayLists(existing.relays, [relayHint]);
+    const relays = mergeRelayLists(existing.relays, relayHints);
     if (relays.length !== (existing.relays ?? []).length) {
       updateHandle(docId, { relays });
     }
@@ -192,7 +194,7 @@ async function joinInventoryImpl(docId: Id, token: string, key?: string): Promis
     rwToken: token,
     key: contentKey,
     readonly: false,
-    relays: [relayHint],
+    relays: relayHints,
   });
   openDoc(docId);
   return getStoredHandle(docId)!;

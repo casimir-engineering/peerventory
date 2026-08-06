@@ -69,6 +69,7 @@ export function ConfirmModal({
   destructive,
   onConfirm,
   onClose,
+  children,
 }: {
   title: string;
   body: string;
@@ -77,6 +78,8 @@ export function ConfirmModal({
   destructive?: boolean;
   onConfirm: () => void;
   onClose: () => void;
+  /** Extra content (e.g. an option checkbox) rendered under the body text. */
+  children?: ReactNode;
 }) {
   return (
     <Modal
@@ -101,6 +104,7 @@ export function ConfirmModal({
       }
     >
       <p className="small muted">{body}</p>
+      {children}
     </Modal>
   );
 }

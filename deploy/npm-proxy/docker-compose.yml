@@ -10,6 +10,8 @@ services:
     environment:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      # Lease GC: docs untouched for this many days are deleted (0 disables).
+      RETENTION_DAYS: ${RETENTION_DAYS:-180}
     volumes:
       - ./data:/app/server/data
     networks:

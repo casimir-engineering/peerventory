@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { useInventories } from '../../store';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { defaultRelayOrigin, rememberRelayHints, useInventories } from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
+import { decodeRelayHints } from '../lib/links';
 import { AppHeader } from '../components/AppHeader';
 import { EmptyState, LoadingPage } from '../components/Common';
 
@@ -11,6 +12,7 @@ import { EmptyState, LoadingPage } from '../components/Common';
  */
 export function JoinPage() {
   const { docId, token, key, itemId, dotIds, listId } = useParams();
+  const { search } = useLocation();
   const navigate = useNavigate();
   const { joinInventory }: UseInventoriesResult = useInventories();
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +30,12 @@ export function JoinPage() {
     if (itemId) suffix = `/i/${itemId}`;
     else if (dotIds) suffix = `/l/${dotIds}`;
     else if (listId) suffix = `/sl/${listId}`;
+
+    // Relay hints the link embedded (`?r=` inside the fragment). The wrapper
+    // origin — where this page was loaded from — stays a hint too, so it is
+    // stashed alongside instead of being displaced by the embedded list.
+    const hinted = decodeRelayHints(new URLSearchParams(search).get('r'));
+    if (hinted.length > 0) rememberRelayHints(docId, [defaultRelayOrigin(), ...hinted]);
 
     joinInventory(docId, token, key)
       .then(() => navigate(`/inv/${docId}${suffix}`, { replace: true }))

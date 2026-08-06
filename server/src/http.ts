@@ -22,6 +22,7 @@ import {
   type AiRuntimeOptions,
 } from "./ai.js";
 import { authenticateDoc, sha256Hex, type AccessLevel } from "./auth.js";
+import { deleteDocData } from "./gc.js";
 import type { MetadataStore } from "./storage.js";
 
 export const MAX_BLOB_BYTES = 10 * 1024 * 1024;
@@ -33,13 +34,15 @@ interface HttpAppOptions {
   staticDir: string;
   metadata: MetadataStore;
   serveStatic: boolean;
+  /** Called when a doc is explicitly deleted (closes live sync connections). */
+  onDocDeleted?: (docId: string) => void;
 }
 
 function setCorsHeaders(response: Response): void {
   response.set({
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "x-token, content-type",
-    "Access-Control-Allow-Methods": "GET, PUT, POST, HEAD, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, PUT, POST, DELETE, HEAD, OPTIONS",
   });
 }
 
@@ -78,6 +81,8 @@ function requireAccess(
     return null;
   }
 
+  // Any authenticated blob access renews the doc's GC lease (see gc.ts).
+  metadata.touchDoc(docId);
   return accessLevel;
 }
 
@@ -107,7 +112,7 @@ async function storeBlobAtomically(path: string, body: Buffer): Promise<void> {
 
 export function createHttpApp(options: HttpAppOptions): express.Express {
   const app = express();
-  const { ai, blobDir, metadata, serveStatic, staticDir } = options;
+  const { ai, blobDir, metadata, onDocDeleted, serveStatic, staticDir } = options;
   const rawBlobBody = express.raw({
     limit: MAX_BLOB_BYTES,
     type: () => true,
@@ -211,6 +216,34 @@ export function createHttpApp(options: HttpAppOptions): express.Express {
 
   app.get("/api/blobs/:docId/:hash", sendBlob);
   app.head("/api/blobs/:docId/:hash", sendBlob);
+
+  // Explicit immediate deletion (the lease sweep in gc.ts is the fallback):
+  // an rw-token holder removes the doc's Yjs state, token record and blobs.
+  // Idempotent — deleting an unknown doc succeeds with 204, so a retry after
+  // a success (whose token record is gone) does not turn into an error.
+  app.delete("/api/docs/:docId", async (request, response) => {
+    const docId = String(request.params.docId);
+    const token = getToken(request);
+    if (!token) {
+      response.sendStatus(401);
+      return;
+    }
+    const meta = metadata.getDocMeta(docId);
+    if (meta) {
+      const level = authenticateDoc(meta, JSON.stringify({ t: token }))?.level;
+      if (level !== "rw") {
+        response.sendStatus(403);
+        return;
+      }
+      // Close live sync connections first so Hocuspocus stops serving the
+      // doc; a debounced store racing this delete leaves at most an inert
+      // orphan row (no token record), which the next sweep removes.
+      onDocDeleted?.(docId);
+      await deleteDocData(metadata, blobDir, docId);
+      console.info("[gc] doc deleted on request");
+    }
+    response.sendStatus(204);
+  });
 
   app.use("/api", (_request, response) => {
     response.sendStatus(404);

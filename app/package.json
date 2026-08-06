@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "check:account": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/account-roundtrip.mjs",
     "check:stats": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/stats-quantity.mjs",
-    "test:store": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/relays-merge.mjs && node scripts/dist/gossip-intro.mjs"
+    "test:store": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/relays-merge.mjs && node scripts/dist/gossip-intro.mjs && node scripts/dist/backup-payload.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",

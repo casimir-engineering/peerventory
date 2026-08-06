@@ -11,6 +11,7 @@
     "selftest:ai": "tsx src/ai-selftest.ts",
     "e2e": "tsx src/e2e-two-clients.ts",
     "e2e:enc": "tsx src/e2e-encrypted.ts",
+    "e2e:gc": "tsx src/e2e-gc.ts",
     "e2e:profile": "tsx src/e2e-profile.ts",
     "e2e:multirelay": "tsx src/e2e-multirelay.ts",
     "e2e:signal": "tsx src/e2e-signal-redundancy.ts"

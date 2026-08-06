@@ -19,6 +19,7 @@ export default defineConfig({
         'scripts/stats-quantity.ts',
         'scripts/relays-merge.ts',
         'scripts/gossip-intro.ts',
+        'scripts/backup-payload.ts',
       ],
       output: { entryFileNames: '[name].mjs' },
     },

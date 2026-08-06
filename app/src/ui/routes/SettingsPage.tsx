@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
+  deleteDocFromRelays,
   getRelayConns,
   getStoredHandle,
   isOwnedInventory,
@@ -24,6 +25,16 @@ import { SmartCombo } from '../components/SmartCombo';
 import { ConfirmModal } from '../components/Modal';
 import { useToast } from '../components/Toast';
 
+/**
+ * Only the OWNER of an inventory may clear it off the relays (the DELETE
+ * endpoint needs the rw token, and deleting someone else's shared inventory
+ * from relays they may rely on would be hostile). Hidden for joined docs.
+ */
+function canDeleteFromRelays(docId: string): boolean {
+  const h = getStoredHandle(docId);
+  return Boolean(h && isOwnedInventory(h) && h.rwToken && !h.readonly);
+}
+
 export function SettingsPage() {
   const { docId = '' } = useParams();
   const navigate = useNavigate();
@@ -32,6 +43,7 @@ export function SettingsPage() {
   const { forgetInventory }: UseInventoriesResult = useInventories();
 
   const [confirmForget, setConfirmForget] = useState(false);
+  const [alsoDeleteFromRelays, setAlsoDeleteFromRelays] = useState(false);
   const [deleteBox, setDeleteBox] = useState<Box | null>(null);
   const [newBoxLabel, setNewBoxLabel] = useState('');
   const currencyOptions = useCurrencyComboOptions(inv.meta?.currency);
@@ -321,7 +333,16 @@ export function SettingsPage() {
 
           <section className="card stack tight">
             <SectionTitle>This device</SectionTitle>
-            <button type="button" className="btn danger" onClick={() => setConfirmForget(true)}>
+            <button
+              type="button"
+              className="btn danger"
+              onClick={() => {
+                // Owned inventories default to also clearing the relays; the
+                // option is hidden entirely for inventories shared with us.
+                setAlsoDeleteFromRelays(canDeleteFromRelays(docId));
+                setConfirmForget(true);
+              }}
+            >
               Forget this inventory…
             </button>
             <p className="tiny faint">
@@ -354,16 +375,48 @@ export function SettingsPage() {
           destructive
           onClose={() => setConfirmForget(false)}
           onConfirm={() => {
+            // Captured before the handle is removed: the relays the doc is
+            // known to live on, and the write token the DELETE needs.
+            const handle = getStoredHandle(docId);
+            const relays = handle?.relays ?? [];
+            const rwToken = handle?.rwToken;
+            const wantRemoteDelete =
+              alsoDeleteFromRelays && canDeleteFromRelays(docId) && relays.length > 0 && rwToken;
             forgetInventory(docId)
               .then(() => {
                 toast('Inventory removed from this device');
                 navigate('/', { replace: true });
+                if (!wantRemoteDelete) return;
+                // Best-effort, after local removal: a relay that is offline
+                // right now keeps the ciphertext until its lease GC ages it
+                // out, so a failure costs privacy-nothing and is only noted.
+                void deleteDocFromRelays(docId, rwToken, relays).then(({ deleted, failed }) => {
+                  if (failed.length === 0) {
+                    toast(
+                      `Deleted from ${deleted.length} relay${deleted.length === 1 ? '' : 's'}`,
+                    );
+                  } else {
+                    toastError(
+                      `Deleted from ${deleted.length} of ${deleted.length + failed.length} relays — ` +
+                        `the unreachable ones keep their copy until it expires on its own`,
+                    );
+                  }
+                });
               })
               .catch((err: unknown) => {
                 toastError(err instanceof Error ? err.message : 'Could not forget the inventory');
               });
           }}
-        />
+        >
+          {canDeleteFromRelays(docId) ? (
+            <Toggle
+              label="Also delete from my relays"
+              description="Removes this inventory's encrypted data and photos from every relay it was pushed to. Anyone still holding a share link loses access."
+              checked={alsoDeleteFromRelays}
+              onChange={setAlsoDeleteFromRelays}
+            />
+          ) : null}
+        </ConfirmModal>
       ) : null}
     </>
   );
