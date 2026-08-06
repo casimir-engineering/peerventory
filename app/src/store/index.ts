@@ -8,8 +8,13 @@ export {
   moveItemToInventory,
   restoreSnapshotInto,
   reopenEncryptedDoc,
-  replicateToMyRelays,
 } from './hooks';
+export {
+  canReplicate,
+  isOwnedInventory,
+  replicateToMyRelays,
+  startReplicationPolicy,
+} from './replication';
 export type { MoveItemResult } from './hooks';
 export { usePhotoUrl, getPhotoBlob } from './photos';
 export { normalizeImage } from './imagePipeline';
@@ -30,7 +35,20 @@ export {
   subscribeRelays,
   type RelayEntry,
 } from './relays';
-export { isP2pEnabled, setP2pEnabled, subscribeP2p } from './p2p';
+export {
+  isP2pEnabled,
+  setP2pEnabled,
+  subscribeP2p,
+  subscribeP2pPresence,
+  getP2pPresenceSnapshot,
+  isDeviceReachableP2p,
+} from './p2p';
+export {
+  startLanDiscovery,
+  subscribeLan,
+  getLanPeerCount,
+  isLanSupported,
+} from './lan';
 export {
   startProfileSync,
   stopProfileSync,
@@ -39,6 +57,8 @@ export {
   currentProfileDocId,
   adoptProfileHandle,
   profileRecordInventory,
+  subscribeAccountDevices,
+  getAccountDevicesSnapshot,
 } from './profileSync';
 export type {
   ItemDraft,

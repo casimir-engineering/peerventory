@@ -12,7 +12,8 @@
     "e2e": "tsx src/e2e-two-clients.ts",
     "e2e:enc": "tsx src/e2e-encrypted.ts",
     "e2e:profile": "tsx src/e2e-profile.ts",
-    "e2e:multirelay": "tsx src/e2e-multirelay.ts"
+    "e2e:multirelay": "tsx src/e2e-multirelay.ts",
+    "e2e:signal": "tsx src/e2e-signal-redundancy.ts"
   },
   "dependencies": {
     "@hocuspocus/extension-sqlite": "^4.4.0",

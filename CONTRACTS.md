@@ -54,6 +54,28 @@ replication happens through clients.
   configured default. Each `InventoryHandle` carries `relays: string[]` — the
   origins the doc is known to live on. A share link's origin is *a* relay
   hint recorded at join time, not "the" server.
+- ACCOUNT relay list (`store/accountRelays.ts` + profileSync): the relay set
+  is account-level state, synced through the profile doc's `Y.Map('relays')`
+  (`origin -> { u, at, removed? }`). Adding a relay on any device adds it on
+  all of the account's devices; removing writes a `removed: true` tombstone
+  so other devices drop it without resurrection (an explicit re-add revives
+  a tombstone). Existing local lists union into the doc on first sync
+  (migration). Two things stay PER-DEVICE: the enable/disable override and
+  health display (reachability differs per device — a LAN relay may be
+  phone-only), and each device's own configured default origin, which is
+  pinned and survives an account-level removal.
+- Replication policy (`store/replication.ts`): inventories OWNED by the
+  account replicate automatically to every relay enabled on the device
+  (doc registration via the create-handshake + photo upload queueing),
+  re-checked whenever the relay set or the registry changes. Ownership =
+  `owned: true` stamped on the handle at creation and propagated through the
+  profile doc (`ow`); pre-flag inventories fall back to a capability test
+  (both tokens + server-confirmed or pending-create write access — exactly
+  what registering on a new relay requires anyway). Joined/shared
+  inventories NEVER auto-replicate: pushing someone else's inventory to new
+  relays is explicit, via the per-inventory "Replicate to all my relays"
+  button (hidden for owned inventories, where it is automatic) or the
+  one-time prompt offered right after adding a relay.
 - Connection layer (`docs.ts`): every open doc runs ONE HocuspocusProvider
   PER configured relay on the same outer Y.Doc — Yjs updates dedupe by
   design, so multi-homing is safe and keeps all relays converged while at
@@ -81,7 +103,15 @@ sync if the P2P link is already established; see the limitation below.
   once before). Each relay exposes a `/signal` WebSocket endpoint
   (`server/src/signaling.ts`) speaking y-webrtc's pub/sub protocol
   (`subscribe`/`unsubscribe`/`publish`/`ping` JSON messages on topic names).
-  Clients use `wss://<relay>/signal` of every ENABLED relay.
+- Signaling redundancy: a doc's room announces on `wss://<relay>/signal` of
+  EVERY enabled relay of the device PLUS every relay on the doc's handle
+  (`p2pSignalingOrigins`) — one socket per relay, announces on all, so two
+  peers meet as long as they share ANY reachable relay (verified by
+  `server npm run e2e:signal`). The lib0 websocket client reconnects forever
+  with backoff and re-subscribes on connect, so a relay coming back is
+  re-used automatically; when the origin set itself changes (relay
+  added/removed, gossiped hints), the provider is restarted with the new
+  URL list.
 - Room privacy: the room name is
   `base64url(HMAC-SHA256(contentKey, "peerventory:webrtc-room:" + docId))` —
   unguessable without the E2E content key — and y-webrtc's room password
@@ -94,10 +124,74 @@ sync if the P2P link is already established; see the limitation below.
 - ICE: simple-peer defaults (public STUN for NAT traversal; STUN servers see
   IPs only, never data). On a shared LAN, host candidates suffice.
 - Toggle: "Direct device-to-device sync", localStorage `p2p:v1`, default ON.
-  UI shows the live direct-peer count per inventory.
-- Limitation (accepted): signaling-via-own-relay IS the discovery mechanism.
-  If two devices can reach no common relay at the moment of introduction,
-  they cannot find each other (mDNS/local discovery is out of scope).
+  UI shows the live direct-peer count per inventory. The profile doc runs a
+  P2P room of its own, so account devices sharing no inventory still gossip.
+- Discovery limitation, much narrower than before: two devices that share no
+  reachable relay, no common already-connected peer (gossip below) and are
+  not on the same LAN (Android, below) cannot be introduced. Once ANY
+  introduction path exists, coordinates spread (gossiped relay hints) and
+  established data channels keep syncing with zero relays.
+
+### Peer gossip & introduction (gossip.ts)
+
+Connected peers help each other stay connected. The protocol rides
+y-webrtc's AWARENESS states — awareness floods transitively through every
+connected peer of a room (each peer re-broadcasts applied updates), giving a
+store-and-forward channel with zero y-webrtc changes. Two local state
+fields, adapted onto each room by p2p.ts:
+
+- `pv` — the peer's card: `{ v: 1, pid (room peer id), dev (device id),
+  plat?, rl? (relay origins it syncs this doc through) }`. Receivers union
+  `rl` into the doc handle's relay list (cross-pollination between accounts
+  sharing an inventory, even when no relay/profile doc is reachable — capped
+  at 12 origins) and feed `dev`/`plat` into the account-wide "reachable via
+  P2P" presence.
+- `pvi` — an outbox of INTRODUCTION envelopes: `{ t (target pid), f (sender
+  pid), s (session nonce), i (sequence), tk? (glare token), ts?, sg (the
+  simple-peer offer/answer/ICE payload) }`. Because awareness floods, A's
+  envelope for C travels through B when A↔B and B↔C are connected but A and
+  C share no relay — one-hop introduction forwarding without B doing
+  anything but being connected. Receivers dedupe per `(f, s)` stream by
+  sequence; senders prune the outbox on connection success or after 45 s.
+- Driver: peers visible in awareness but not directly connected get an
+  introduction attempt after a 4 s grace period (the relay path gets first
+  try); the DETERMINISTIC initiator is the smaller room peer id (so exactly
+  one side offers; simultaneous-offer glare is resolved with y-webrtc's own
+  glare tokens); up to 3 attempts, 20 s apart, half-open connections reset
+  between attempts.
+- Privacy: awareness rides the room's data channels/BroadcastChannel, which
+  require the doc key to join — relay origins and SDP are not secrets
+  *within* a room, and nothing here touches a signaling server. Protocol is
+  unit-tested under node (`app npm run test:store`).
+
+### LAN discovery (Android ↔ Android, zero infrastructure)
+
+Two Android devices on the same network find each other with no relay and
+no internet (`store/lan.ts` + the `LanDiscovery` Capacitor plugin in
+`app/android`):
+
+- Each device advertises an mDNS/NSD service `_peerventory._tcp` whose TXT
+  record carries its deviceId, and runs a tiny embedded WebSocket server
+  (random port) that is a direct port of `server/src/signaling.ts` — it only
+  ferries opaque topic subscriptions and encrypted publishes.
+- Discovered peers' endpoints (`ws://<lan-ip>:<port>`) each get a standalone
+  y-webrtc `SignalingConn`. y-webrtc keeps a module-global room registry, so
+  a standalone connection transparently serves EVERY open doc room:
+  subscribe + announce on connect, and rooms opened later (or still
+  peer-less) are (re-)announced by lan.ts every 20 s. From the announce on,
+  it is the normal y-webrtc flow — same HMAC room names, same room-password
+  encryption of SDP: a stranger's phone on the LAN learns only opaque room
+  ids and ciphertext.
+- Native surface (kept minimal): `start({deviceId}) -> {port}`, `stop()`,
+  `peersChanged` event with `{deviceId, host, port}[]`. NSD needs no runtime
+  permission; the manifest adds `ACCESS_WIFI_STATE` +
+  `CHANGE_WIFI_MULTICAST_STATE` for the multicast lock that keeps mDNS
+  reliable, plus `usesCleartextTraffic` / `allowMixedContent` because
+  link-local `ws://` cannot carry TLS (payloads are E2E-protected anyway).
+- Web/desktop cannot do mDNS: LAN discovery is Android↔Android. A desktop
+  still reaches phones through any shared relay — or through gossip once
+  any path exists (e.g. phone A introduces desktop↔phone B).
+- Follows the P2P toggle; web builds and non-Android platforms no-op.
 
 ## End-to-end encryption
 
@@ -299,11 +393,19 @@ server changes.
   - `Y.Map('profile')`: `{ name?: string, ownerId?: string }` — the display
     name syncs (doc wins on sync; an explicit local rename pushes); ownerId
     is fill-only, same rule as backup import.
-  - `Y.Map('inventories')`: `docId -> { d, rw?, ro?, ek?, nm?, rl?,
+  - `Y.Map('inventories')`: `docId -> { d, rw?, ro?, ek?, nm?, rl?, ow?,
     removed?, at }` — one plain-object entry per inventory keyed by docId, so
     concurrent list edits merge per inventory (LWW per entry). `rl` is the
     inventory's relay-origin list (union-merged on push, add-only — see
-    "Multi-relay replication"). The AI key is NEVER stored here.
+    "Multi-relay replication"); `ow` marks account ownership (fill-only,
+    drives auto-replication). The AI key is NEVER stored here.
+  - `Y.Map('relays')`: the account relay list, `origin -> { u, at,
+    removed? }` — see "Multi-relay replication" for the merge semantics
+    (tombstones, per-device enable override, pinned default).
+  - `Y.Map('devices')`: `deviceId -> { id, label ("Alex · Android"), at }` —
+    each writing device records itself (throttled to every 5 min). The
+    Account & sync page lists these with last-seen time and marks the ones
+    currently reachable over any live P2P data channel (gossip presence).
 - Mirroring: doc -> registry goes through `importHandles` (never downgrades
   access); newly arrived handles are opened immediately so the inventory
   materializes through normal sync. Registry -> doc is a debounced fill-only

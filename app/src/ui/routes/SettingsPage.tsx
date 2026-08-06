@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { getRelayConns, replicateToMyRelays, useInventories, useInventory } from '../../store';
+import {
+  getRelayConns,
+  getStoredHandle,
+  isOwnedInventory,
+  replicateToMyRelays,
+  useInventories,
+  useInventory,
+} from '../../store';
 import type { UseInventoriesResult, UseInventoryResult } from '../../store/contract';
 import type { Box } from '../../types';
 import { AppHeader } from '../components/AppHeader';
@@ -268,7 +275,13 @@ export function SettingsPage() {
                 {inv.p2pPeers} device{inv.p2pPeers === 1 ? '' : 's'} connected
               </p>
             ) : null}
-            {!readonly ? (
+            {!readonly && isOwnedInventory(getStoredHandle(docId)) ? (
+              <p className="tiny faint">
+                This inventory is yours: it replicates automatically (with its photos) to every
+                relay enabled on your account. Manage relays under Account &amp; sync (
+                {'\u2699\uFE0E'} on the home screen).
+              </p>
+            ) : !readonly ? (
               <>
                 <button
                   type="button"
@@ -289,9 +302,10 @@ export function SettingsPage() {
                   Replicate to all my relays
                 </button>
                 <p className="tiny faint">
-                  Pushes this inventory (and its photos) to every relay enabled on this device, so
-                  it stays available if one relay disappears. Manage relays under Account &amp;
-                  sync ({'\u2699\uFE0E'} on the home screen).
+                  This inventory was shared with you, so it is never pushed to your relays
+                  automatically. This button replicates it (and its photos) to every relay enabled
+                  on this device, so it stays available to you if the sharer&apos;s relay
+                  disappears.
                 </p>
               </>
             ) : null}

@@ -11,7 +11,17 @@ import { useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 
 import * as services from '../../services';
-import { getProfileStatus, subscribeProfileStatus, useInventories } from '../../store';
+import {
+  getAccountDevicesSnapshot,
+  getDeviceId,
+  getP2pPresenceSnapshot,
+  getProfileStatus,
+  isDeviceReachableP2p,
+  subscribeAccountDevices,
+  subscribeP2pPresence,
+  subscribeProfileStatus,
+  useInventories,
+} from '../../store';
 import type { UseInventoriesResult } from '../../store/contract';
 import { AppHeader } from '../components/AppHeader';
 import { AiKeyModal, NameModal } from '../components/AccountModals';
@@ -86,6 +96,7 @@ export function AccountPage() {
               {handles.length} inventor{handles.length === 1 ? 'y' : 'ies'} synced across your
               linked devices · <ProfileSyncStatus />
             </p>
+            <LinkedDevices />
             <button type="button" className="btn primary" onClick={() => setLinkModal(true)}>
               Link another device
             </button>
@@ -233,6 +244,50 @@ export function AccountPage() {
 
       {importModals}
     </>
+  );
+}
+
+function lastSeenLabel(at: number): string {
+  const mins = Math.round((Date.now() - at) / 60_000);
+  if (mins < 2) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} days ago`;
+}
+
+/**
+ * The devices linked to this account (from the profile doc), with live P2P
+ * reachability: green = a direct WebRTC channel to that device is open right
+ * now on any inventory or on the profile doc itself.
+ */
+function LinkedDevices() {
+  const devices = useSyncExternalStore(subscribeAccountDevices, getAccountDevicesSnapshot);
+  // Re-render when P2P reachability changes.
+  useSyncExternalStore(subscribeP2pPresence, getP2pPresenceSnapshot);
+  const selfId = getDeviceId();
+  if (devices.length === 0) return null;
+  return (
+    <div className="list-rows">
+      {devices.map((d) => {
+        const self = d.id === selfId;
+        const reachable = self || isDeviceReachableP2p(d.id);
+        return (
+          <div className="list-row" key={d.id} style={{ cursor: 'default' }}>
+            <span className={`sync-dot ${reachable ? 'synced' : 'offline'}`} aria-hidden="true" />
+            <div className="grow" style={{ minWidth: 0 }}>
+              <span className="small">
+                {d.label}
+                {self ? ' — this device' : ''}
+              </span>
+            </div>
+            <span className="tiny faint">
+              {self ? '' : reachable ? 'reachable now' : `seen ${lastSeenLabel(d.at)}`}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

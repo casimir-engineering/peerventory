@@ -44,7 +44,6 @@ import {
   addPhoto as storeAddPhoto,
   clearAllPhotoData,
   clearUploadQueue,
-  enqueueDocPhotos,
   getPhotoBlob,
   kickUploadLoop,
 } from './photos';
@@ -104,6 +103,8 @@ async function createInventory(
     name,
     readonly: false,
     pendingCreate: true,
+    // Created here: this account owns it (drives automatic replication).
+    owned: true,
     relays: mergeRelayLists([defaultRelayOrigin()], enabledRelayOrigins()),
   });
 
@@ -195,33 +196,6 @@ async function joinInventoryImpl(docId: Id, token: string, key?: string): Promis
   });
   openDoc(docId);
   return getStoredHandle(docId)!;
-}
-
-/**
- * Push an inventory to every relay enabled on this device: the handle's relay
- * list becomes the union, the doc (re)connects everywhere — new relays learn
- * the doc through the create-handshake (requires a server-confirmed rw token
- * plus the ro token, see CONTRACTS.md "Multi-relay replication") — and all
- * photos are queued for upload to relays that miss them.
- */
-export async function replicateToMyRelays(
-  docId: Id,
-): Promise<{ relays: string[]; photosQueued: number }> {
-  const h = getStoredHandle(docId);
-  if (!h) throw new Error('replicateToMyRelays: unknown inventory');
-  const relays = mergeRelayLists(
-    h.relays ?? [defaultRelayOrigin()],
-    enabledRelayOrigins(),
-  );
-  updateHandle(docId, { relays });
-  openDoc(docId);
-  resyncDoc(docId, { tokenChanged: true });
-  let photosQueued = 0;
-  if (h.rwToken && !h.readonly) {
-    photosQueued = await enqueueDocPhotos(docId);
-    kickUploadLoop(docId);
-  }
-  return { relays, photosQueued };
 }
 
 /**

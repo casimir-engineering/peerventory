@@ -22,7 +22,7 @@ export function getDeviceId(): string {
   }
 }
 
-function platformLabel(): string {
+export function platformLabel(): string {
   const ua = navigator.userAgent;
   if (/Android/i.test(ua)) return 'Android';
   if (/iPhone|iPad/i.test(ua)) return 'iPhone';

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "check:account": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/account-roundtrip.mjs",
-    "check:stats": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/stats-quantity.mjs"
+    "check:stats": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/stats-quantity.mjs",
+    "test:store": "vite build --config scripts/vite.scripts.config.ts && node scripts/dist/relays-merge.mjs && node scripts/dist/gossip-intro.mjs"
   },
   "dependencies": {
     "@capacitor/app": "^8.1.1",
@@ -23,6 +24,7 @@
     "idb-keyval": "^6.3.0",
     "jsqr": "^1.4.0",
     "jszip": "^3.10.1",
+    "lib0": "^0.2.117",
     "nanoid": "^6.0.1",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",

@@ -106,7 +106,7 @@ function sameRelays(a?: string[], b?: string[]): boolean {
  */
 export function importHandles(
   incoming: Array<
-    Pick<InventoryHandle, 'docId' | 'rwToken' | 'roToken' | 'key' | 'name' | 'relays'>
+    Pick<InventoryHandle, 'docId' | 'rwToken' | 'roToken' | 'key' | 'name' | 'relays' | 'owned'>
   >,
 ): { added: number; upgraded: number; unchanged: number } {
   let added = 0;
@@ -127,12 +127,16 @@ export function importHandles(
         name: inc.name,
         relays: unionRelays(inc.relays),
         readonly: !inc.rwToken,
+        ...(inc.owned ? { owned: true } : {}),
       });
       added++;
       continue;
     }
     const existing = next[idx];
     const relays = unionRelays(existing.relays, inc.relays);
+    // Ownership is fill-only (true never reverts): another account device
+    // saying "this is ours" upgrades the local view.
+    const owned = existing.owned || inc.owned || undefined;
     const canUpgrade =
       inc.rwToken &&
       inc.rwToken !== existing.rwToken &&
@@ -147,6 +151,7 @@ export function importHandles(
         relays,
         readonly: false,
         rwConfirmed: undefined,
+        ...(owned ? { owned: true } : {}),
       };
       upgraded++;
     } else {
@@ -156,6 +161,7 @@ export function importHandles(
         (!existing.roToken && inc.roToken) ||
         (!existing.name && inc.name) ||
         (!existing.key && inc.key) ||
+        (!existing.owned && owned) ||
         !sameRelays(existing.relays, relays)
       ) {
         next[idx] = {
@@ -164,6 +170,7 @@ export function importHandles(
           key: existing.key ?? inc.key,
           name: existing.name ?? inc.name,
           relays,
+          ...(owned ? { owned: true } : {}),
         };
         filled = true;
       }

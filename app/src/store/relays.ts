@@ -138,11 +138,15 @@ export function addRelay(input: string): { ok: boolean; error?: string } {
   const url = normalizeRelayUrl(input);
   if (!url) return { ok: false, error: 'Not a valid relay URL' };
   if (relays.some((r) => r.url === url)) return { ok: false, error: 'Relay already in the list' };
+  pendingAccountAdds.add(url);
+  pendingAccountRemovals.delete(url);
   persistAndNotify([...relays, { url, enabled: true }]);
   return { ok: true };
 }
 
 export function removeRelay(url: string): void {
+  pendingAccountRemovals.add(url);
+  pendingAccountAdds.delete(url);
   persistAndNotify(relays.filter((r) => r.url !== url));
 }
 
@@ -153,6 +157,48 @@ export function setRelayEnabled(url: string, enabled: boolean): void {
 /** Origins of every enabled relay in the device relay set. */
 export function enabledRelayOrigins(): string[] {
   return relays.filter((r) => r.enabled).map((r) => r.url);
+}
+
+/* ---------- account-level relay list (synced via the profile doc) ----------
+ * The device list above stays the synchronous source the app reads; the
+ * profile doc's Y.Map('relays') keeps it converged across the account's
+ * devices (see accountRelays.ts for the merge semantics). Adds/removals made
+ * here are remembered as intents until profileSync pushes them. */
+
+const pendingAccountAdds = new Set<string>();
+const pendingAccountRemovals = new Set<string>();
+
+export function getPendingRelayAdds(): ReadonlySet<string> {
+  return pendingAccountAdds;
+}
+
+export function getPendingRelayRemovals(): ReadonlySet<string> {
+  return pendingAccountRemovals;
+}
+
+/** Called by profileSync after an intent landed in the profile doc. */
+export function clearRelayIntent(url: string): void {
+  pendingAccountAdds.delete(url);
+  pendingAccountRemovals.delete(url);
+}
+
+/**
+ * Apply the account relay list (doc -> device): add relays other devices
+ * added (enabled by default; enable/disable stays per-device), drop relays
+ * the account removed. The caller (profileSync) computes the plan via
+ * accountRelays.planRelayApply, which pins this device's default origin.
+ */
+export function applyAccountRelays(plan: { add: string[]; remove: string[] }): void {
+  let next = relays;
+  for (const raw of plan.add) {
+    const url = normalizeRelayUrl(raw);
+    if (url && !next.some((r) => r.url === url)) next = [...next, { url, enabled: true }];
+  }
+  for (const raw of plan.remove) {
+    const url = normalizeRelayUrl(raw);
+    if (url && next.some((r) => r.url === url)) next = next.filter((r) => r.url !== url);
+  }
+  if (next !== relays) persistAndNotify(next);
 }
 
 /* ---------- share-link relay hints ----------

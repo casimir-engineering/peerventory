@@ -14,7 +14,12 @@ export default defineConfig({
     emptyOutDir: true,
     target: 'node20',
     rollupOptions: {
-      input: ['scripts/account-roundtrip.ts', 'scripts/stats-quantity.ts'],
+      input: [
+        'scripts/account-roundtrip.ts',
+        'scripts/stats-quantity.ts',
+        'scripts/relays-merge.ts',
+        'scripts/gossip-intro.ts',
+      ],
       output: { entryFileNames: '[name].mjs' },
     },
   },

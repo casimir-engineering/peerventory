@@ -17,9 +17,9 @@ import { getDevicePresence } from './device';
 import { clearOuterDoc, E2eSync, E2EE_REMOTE_ORIGIN, ENC_LOG_NAME } from './e2ee';
 import { sha256Hex } from './ids';
 import { ensureSelfOwner } from './owners';
-import { attachP2p, subscribeP2p, type P2pConn } from './p2p';
-import { getStoredHandle, updateHandle } from './registry';
-import { relayOriginsForDoc, relayWsUrl, subscribeRelays } from './relays';
+import { attachP2p, p2pSignalingOrigins, subscribeP2p, type P2pConn } from './p2p';
+import { getStoredHandle, subscribeRegistry, updateHandle } from './registry';
+import { mergeRelayLists, relayOriginsForDoc, relayWsUrl, subscribeRelays } from './relays';
 // Direct module import (not the services barrel), cycle-free: profile only
 // imports types and the leaf modules store/ids + store/crypto.
 import { subscribeOwnerName } from '../services/profile';
@@ -45,6 +45,8 @@ export interface DocEntry {
   peerCount: number;
   /** Guards async p2p attach against stale completions. */
   p2pGen: number;
+  /** Signaling origins the current p2p attach used (restart detection). */
+  p2pSignals?: string;
   /** Encrypted-sync bridge; set when the handle stores a content key. */
   e2ee: E2eSync | null;
   /**
@@ -359,16 +361,43 @@ function attachRelayConn(entry: DocEntry, origin: string): void {
 
 /* ---------- direct device-to-device sync (WebRTC) ---------- */
 
+/** Cap on a handle's relay list so gossiping peers cannot balloon it. */
+const MAX_HANDLE_RELAYS = 12;
+
+/**
+ * Relay origins gossiped by a room peer become relay hints on the handle
+ * (union, add-only, capped) — the same effect as a share link's origin — and
+ * from there flow into the profile doc's per-doc `rl` hints.
+ */
+function gossipRelaysIntoHandle(docId: Id, urls: string[]): void {
+  const h = getStoredHandle(docId);
+  if (!h) return;
+  const merged = mergeRelayLists(h.relays, urls).slice(0, MAX_HANDLE_RELAYS);
+  if (merged.join(' ') !== (h.relays ?? []).join(' ')) {
+    updateHandle(docId, { relays: merged });
+  }
+}
+
 function attachP2pFor(entry: DocEntry): void {
+  entry.p2pSignals = p2pSignalingOrigins(entry.docId).join(' ');
   const key = getStoredHandle(entry.docId)?.key;
   if (!entry.e2ee || !key) return; // no content key -> no room derivation
   const gen = ++entry.p2pGen;
-  void attachP2p(entry.docId, entry.e2ee.outer, key, (count) => {
-    if (entry.peerCount !== count) {
-      entry.peerCount = count;
-      bump(entry);
-    }
-  }).then((conn) => {
+  void attachP2p(
+    entry.docId,
+    entry.e2ee.outer,
+    key,
+    (count) => {
+      if (entry.peerCount !== count) {
+        entry.peerCount = count;
+        bump(entry);
+      }
+    },
+    {
+      advertiseRelays: () => relayOriginsForDoc(entry.docId),
+      onRemoteRelays: (urls) => gossipRelaysIntoHandle(entry.docId, urls),
+    },
+  ).then((conn) => {
     if (!conn) return;
     // The entry may have been closed or the p2p layer restarted meanwhile.
     if (entries.get(entry.docId) !== entry || gen !== entry.p2pGen) {
@@ -400,6 +429,25 @@ subscribeRelays(() => {
 });
 subscribeP2p(() => {
   for (const entry of entries.values()) restartP2p(entry);
+});
+// A handle's relay list can change while the doc is open (gossip, share-link
+// re-join, replication): pick up new relays for sync AND for signaling.
+subscribeRegistry(() => {
+  for (const entry of entries.values()) {
+    if (entry.conns.size > 0) {
+      const targets = relayOriginsForDoc(entry.docId);
+      if (
+        targets.length !== entry.conns.size ||
+        targets.some((o) => !entry.conns.has(o))
+      ) {
+        reconcileRelayConns(entry);
+      }
+    }
+    const sigs = p2pSignalingOrigins(entry.docId).join(' ');
+    if (entry.p2pSignals !== undefined && sigs !== entry.p2pSignals) {
+      restartP2p(entry);
+    }
+  }
 });
 
 /** Add newly configured relays and drop removed/disabled ones in place. */

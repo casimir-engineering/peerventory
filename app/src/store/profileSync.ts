@@ -9,12 +9,17 @@
  *
  * Inner doc schema (see CONTRACTS.md "Synced profile"):
  * - Y.Map('profile'): { name?: string, ownerId?: string }
- * - Y.Map('inventories'): docId -> { d, rw?, ro?, ek?, nm?, removed?, at }
- *   One plain-object value per inventory (LWW per docId — concurrent list
- *   edits on different inventories always merge). `removed: true` is a
- *   tombstone: other devices drop the handle from their registry but KEEP
- *   the locally cached doc data (no silent data loss; re-joining via a share
- *   link or backup revives the inventory instantly).
+ * - Y.Map('inventories'): docId -> { d, rw?, ro?, ek?, nm?, rl?, ow?,
+ *   removed?, at }. One plain-object value per inventory (LWW per docId —
+ *   concurrent list edits on different inventories always merge).
+ *   `removed: true` is a tombstone: other devices drop the handle from
+ *   their registry but KEEP the locally cached doc data (no silent data
+ *   loss; re-joining via a share link or backup revives the inventory
+ *   instantly).
+ * - Y.Map('relays'): account relay list, origin -> { u, at, removed? }
+ *   (accountRelays.ts holds the merge semantics).
+ * - Y.Map('devices'): deviceId -> { id, label, at } — account device list
+ *   for the "Linked devices" UI (throttled presence).
  *
  * The AI key is deliberately never stored in this doc.
  *
@@ -31,13 +36,26 @@
 import * as Y from 'yjs';
 import { IndexeddbPersistence } from 'y-indexeddb';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
-import type { Id } from '../types';
+import type { DevicePresence, Id } from '../types';
 import type { SyncStatus } from './contract';
+import {
+  planRelayApply,
+  planRelayPush,
+  type AccountRelayEntry,
+} from './accountRelays';
+import { getDevicePresence } from './device';
 import { E2eSync } from './e2ee';
 import { sha256Hex } from './ids';
 import { closeDoc, openDoc } from './docs';
+import { attachP2p, subscribeP2p, type P2pConn } from './p2p';
 import {
+  applyAccountRelays,
+  clearRelayIntent,
+  defaultRelayOrigin,
   enabledRelayOrigins,
+  getPendingRelayAdds,
+  getPendingRelayRemovals,
+  getRelaysSnapshot,
   mergeRelayLists,
   relayWsUrl,
   subscribeRelays,
@@ -67,10 +85,14 @@ import {
 
 const PROFILE_MAP = 'profile';
 const INV_MAP = 'inventories';
+const RELAYS_MAP = 'relays';
+const DEVICES_MAP = 'devices';
 const APPLY_DEBOUNCE_MS = 200;
 const PUSH_DEBOUNCE_MS = 500;
 /** Push even if the first server sync never arrives (offline start). */
 const READY_TIMEOUT_MS = 8_000;
+/** Throttle for this device's presence entry in the profile doc. */
+const DEVICE_PRESENCE_THROTTLE_MS = 5 * 60_000;
 
 /** Wire shape of one inventory entry inside Y.Map('inventories'). */
 interface ProfileInvEntry {
@@ -83,9 +105,20 @@ interface ProfileInvEntry {
   nm?: string;
   /** Relay origins the inventory is known to live on (union-merged). */
   rl?: string[];
+  /** Owned by this account (fill-only; drives automatic replication). */
+  ow?: boolean;
   /** Tombstone: the inventory was left/forgotten on some device. */
   removed?: boolean;
   /** epoch ms of the last write (informational; Y.Map resolves conflicts). */
+  at: number;
+}
+
+/** Wire shape of one entry inside Y.Map('devices') (account device list). */
+interface ProfileDeviceEntry {
+  id: string;
+  /** e.g. "Alex · Android" */
+  label: string;
+  /** epoch ms the device last recorded itself (throttled). */
   at: number;
 }
 
@@ -96,6 +129,13 @@ interface Engine {
   e2ee: E2eSync;
   /** One provider per enabled relay: the profile doc lives on all of them. */
   providers: Map<string, { provider: HocuspocusProvider; status: SyncStatus }>;
+  /**
+   * Direct device-to-device sync of the profile doc itself: the account's
+   * devices share a standing P2P room, so the inventory/relay lists converge
+   * and devices see each other as reachable even with zero relays up.
+   */
+  p2p: P2pConn | null;
+  p2pGen: number;
   /** Local load done + first server sync attempt settled: safe to push. */
   ready: boolean;
   destroyed: boolean;
@@ -103,6 +143,7 @@ interface Engine {
   applyTimer?: ReturnType<typeof setTimeout>;
   pushTimer?: ReturnType<typeof setTimeout>;
   readyTimer?: ReturnType<typeof setTimeout>;
+  presenceTimer?: ReturnType<typeof setInterval>;
 }
 
 let engine: Engine | null = null;
@@ -130,6 +171,40 @@ function setStatus(next: SyncStatus): void {
   for (const cb of statusListeners) cb();
 }
 
+/* ---------------- account data (devices list) for the UI ---------------- */
+
+let dataVersion = 0;
+const dataListeners = new Set<() => void>();
+let devicesSnapshot: DevicePresence[] = [];
+let devicesSnapshotVersion = -1;
+
+function bumpAccountData(): void {
+  dataVersion++;
+  for (const cb of dataListeners) cb();
+}
+
+export function subscribeAccountDevices(cb: () => void): () => void {
+  dataListeners.add(cb);
+  return () => dataListeners.delete(cb);
+}
+
+/** Devices linked to this account, from the profile doc (newest first). */
+export function getAccountDevicesSnapshot(): DevicePresence[] {
+  if (devicesSnapshotVersion !== dataVersion) {
+    devicesSnapshotVersion = dataVersion;
+    const out: DevicePresence[] = [];
+    const map = engine?.doc.getMap<ProfileDeviceEntry>(DEVICES_MAP);
+    map?.forEach((v) => {
+      if (v && typeof v.id === 'string' && typeof v.label === 'string' && typeof v.at === 'number') {
+        out.push({ id: v.id, label: v.label, at: v.at });
+      }
+    });
+    out.sort((a, b) => b.at - a.at);
+    devicesSnapshot = out;
+  }
+  return devicesSnapshot;
+}
+
 /* ---------------- lifecycle ---------------- */
 
 /** Start (or return) the profile sync engine. Lazily creates the profile doc
@@ -147,6 +222,7 @@ function stopEngine(opts?: { clearData?: boolean }): Promise<void> {
   clearTimeout(e.applyTimer);
   clearTimeout(e.pushTimer);
   clearTimeout(e.readyTimer);
+  clearInterval(e.presenceTimer);
   for (const unsub of e.unsubs) unsub();
   for (const conn of e.providers.values()) {
     try {
@@ -154,8 +230,14 @@ function stopEngine(opts?: { clearData?: boolean }): Promise<void> {
     } catch { /* ignore */ }
   }
   e.providers.clear();
+  e.p2pGen++;
+  try {
+    e.p2p?.destroy();
+  } catch { /* ignore */ }
+  e.p2p = null;
   pendingLive.clear();
   setStatus('offline');
+  bumpAccountData();
   const done = Promise.all([
     e.e2ee.destroy({ clearData: opts?.clearData }).catch(() => {}),
     (opts?.clearData ? e.idb.clearData() : e.idb.destroy()).catch(() => {}),
@@ -191,6 +273,8 @@ function openEngine(handle: ProfileDocHandle): void {
     idb,
     e2ee,
     providers: new Map(),
+    p2p: null,
+    p2pGen: 0,
     ready: false,
     destroyed: false,
     unsubs: [],
@@ -201,10 +285,14 @@ function openEngine(handle: ProfileDocHandle): void {
     console.warn('[profile-sync] e2ee start failed', err);
   });
 
-  doc.on('update', () => scheduleApply(e));
+  doc.on('update', () => {
+    scheduleApply(e);
+    bumpAccountData();
+  });
   idb.whenSynced.then(() => {
     if (e.destroyed) return;
     scheduleApply(e);
+    bumpAccountData();
     // If the server never answers (offline start), push after a grace period
     // so locally created inventories still land in the (local) profile doc.
     e.readyTimer = setTimeout(() => markReady(e), READY_TIMEOUT_MS);
@@ -219,10 +307,58 @@ function openEngine(handle: ProfileDocHandle): void {
     }),
   );
   // The profile doc follows the device relay set: connect to added relays,
-  // drop removed/disabled ones.
-  e.unsubs.push(subscribeRelays(() => reconcileProviders(e)));
+  // drop removed/disabled ones; the relay set also feeds the profile doc's
+  // relay map, and the P2P signaling list changes with it.
+  e.unsubs.push(
+    subscribeRelays(() => {
+      reconcileProviders(e);
+      schedulePush(e);
+      restartProfileP2p(e);
+    }),
+  );
+  e.unsubs.push(subscribeP2p(() => restartProfileP2p(e)));
 
   attachProviders(e);
+  attachProfileP2p(e);
+  e.presenceTimer = setInterval(() => {
+    if (!e.destroyed && e.ready) recordDevicePresence(e);
+  }, DEVICE_PRESENCE_THROTTLE_MS);
+}
+
+/* ---------------- direct device-to-device sync of the profile doc ---------------- */
+
+function attachProfileP2p(e: Engine): void {
+  if (!e.handle.key) return;
+  const gen = ++e.p2pGen;
+  void attachP2p(
+    e.handle.docId,
+    e.e2ee.outer,
+    e.handle.key,
+    () => bumpAccountData(),
+    {
+      // Within the account, advertise the device's enabled relays: another
+      // account device picking them up is exactly the account relay list
+      // converging (the doc itself carries the authoritative map).
+      advertiseRelays: () => enabledRelayOrigins(),
+    },
+  ).then((conn) => {
+    if (!conn) return;
+    if (engine !== e || e.destroyed || gen !== e.p2pGen) {
+      conn.destroy();
+      return;
+    }
+    e.p2p = conn;
+  });
+}
+
+function restartProfileP2p(e: Engine): void {
+  if (e.destroyed) return;
+  e.p2pGen++;
+  try {
+    e.p2p?.destroy();
+  } catch { /* ignore */ }
+  e.p2p = null;
+  attachProfileP2p(e);
 }
 
 function markReady(e: Engine): void {
@@ -354,6 +490,20 @@ function applyDocToLocal(e: Engine): void {
     setUserName(name);
   }
 
+  // Account relay list: doc -> device list (this device's default origin is
+  // pinned and survives an account-level removal; un-pushed local adds win
+  // over stale tombstones).
+  const relaysMap = e.doc.getMap<AccountRelayEntry>(RELAYS_MAP);
+  const relayEntries: AccountRelayEntry[] = [];
+  relaysMap.forEach((v) => {
+    if (v && typeof v === 'object' && typeof v.u === 'string') relayEntries.push(v);
+  });
+  if (relayEntries.length > 0) {
+    applyAccountRelays(
+      planRelayApply(relayEntries, getRelaysSnapshot(), defaultRelayOrigin(), getPendingRelayAdds()),
+    );
+  }
+
   const map = e.doc.getMap<ProfileInvEntry>(INV_MAP);
   const live: Array<{
     docId: string;
@@ -362,6 +512,7 @@ function applyDocToLocal(e: Engine): void {
     key?: string;
     name?: string;
     relays?: string[];
+    owned?: boolean;
   }> = [];
   const removed: string[] = [];
   map.forEach((_v, docId) => {
@@ -376,6 +527,7 @@ function applyDocToLocal(e: Engine): void {
         key: entry.ek,
         name: entry.nm,
         relays: Array.isArray(entry.rl) ? entry.rl : undefined,
+        owned: entry.ow === true,
       });
     }
   });
@@ -413,14 +565,37 @@ function sameEntry(a: ProfileInvEntry, b: ProfileInvEntry): boolean {
     a.ek === b.ek &&
     a.nm === b.nm &&
     !a.removed === !b.removed &&
+    !a.ow === !b.ow &&
     (a.rl ?? []).join(' ') === (b.rl ?? []).join(' ')
   );
+}
+
+/**
+ * Record this device in the account's device list (name·platform, last
+ * seen). Requires write access to the profile doc; throttled.
+ */
+function recordDevicePresence(e: Engine): void {
+  if (!getProfileDocHandle()?.rwToken) return;
+  const presence = getDevicePresence();
+  const map = e.doc.getMap<ProfileDeviceEntry>(DEVICES_MAP);
+  const prev = map.get(presence.id);
+  if (
+    prev &&
+    typeof prev.at === 'number' &&
+    Date.now() - prev.at < DEVICE_PRESENCE_THROTTLE_MS &&
+    prev.label === presence.label
+  ) {
+    return;
+  }
+  map.set(presence.id, { id: presence.id, label: presence.label, at: presence.at });
 }
 
 function pushLocalToDoc(e: Engine): void {
   const map = e.doc.getMap<ProfileInvEntry>(INV_MAP);
   const profile = e.doc.getMap<unknown>(PROFILE_MAP);
+  const relaysMap = e.doc.getMap<AccountRelayEntry>(RELAYS_MAP);
   const localName = getUserName();
+  const writtenIntents: string[] = [];
 
   e.doc.transact(() => {
     if (localName && (pendingNamePush || typeof profile.get('name') !== 'string')) {
@@ -428,6 +603,24 @@ function pushLocalToDoc(e: Engine): void {
     }
     pendingNamePush = false;
     if (typeof profile.get('ownerId') !== 'string') profile.set('ownerId', getOwnerId());
+
+    // Account relay list: device -> doc (first push unions the local list in,
+    // which is the migration path for pre-account-relay installs).
+    const docRelays = new Map<string, AccountRelayEntry>();
+    relaysMap.forEach((v, k) => {
+      if (v && typeof v === 'object' && typeof v.u === 'string') docRelays.set(k, v);
+    });
+    const relayOps = planRelayPush(
+      getRelaysSnapshot(),
+      docRelays,
+      getPendingRelayAdds(),
+      getPendingRelayRemovals(),
+      Date.now(),
+    );
+    for (const op of relayOps) {
+      relaysMap.set(op.u, op);
+      writtenIntents.push(op.u);
+    }
 
     for (const h of getHandlesSnapshot()) {
       if (h.docId === e.handle.docId) continue;
@@ -444,6 +637,7 @@ function pushLocalToDoc(e: Engine): void {
       const ro = h.roToken ?? existing?.ro;
       const ek = h.key ?? existing?.ek;
       const nm = h.name ?? existing?.nm;
+      const ow = h.owned || existing?.ow;
       // Relay lists union-merge: a device can add relays, never remove them
       // through the profile doc (removal stays a local decision).
       const rl = mergeRelayLists(existing?.rl, h.relays);
@@ -451,11 +645,14 @@ function pushLocalToDoc(e: Engine): void {
       if (ro) next.ro = ro;
       if (ek) next.ek = ek;
       if (nm) next.nm = nm;
+      if (ow) next.ow = true;
       if (rl.length > 0) next.rl = rl;
       if (existing && sameEntry(existing, next)) continue;
       map.set(h.docId, next);
     }
   });
+  for (const url of writtenIntents) clearRelayIntent(url);
+  recordDevicePresence(e);
   // Ids whose handle has not landed in the registry yet stay pending for the
   // next push (joinInventory records the intent before the async join settles).
   for (const id of Array.from(pendingLive)) {

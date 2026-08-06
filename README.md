@@ -192,20 +192,30 @@ contract and workflow.
   hashes stored server-side). The real inventory document exists only on
   devices; decryption keys never reach any relay. No relay is special and
   relays know nothing about each other.
-- **Multi-relay replication.** Every device keeps a relay list; every
-  inventory records which relays it lives on and syncs through ALL of them
-  simultaneously. The same access tokens work on every relay ("replicate to
-  all my relays" registers the doc on new relays through the ordinary
-  creation handshake and pushes the encrypted state + photos). Kill a relay
-  and the doc keeps syncing through the others; a share link's origin is
-  just a hint for one relay it lives on.
+- **Multi-relay replication.** The relay list is account-level: add a relay
+  on one device and every linked device starts using it (enable/disable and
+  health stay per-device — reachability differs). Every inventory records
+  which relays it lives on and syncs through ALL of them simultaneously; the
+  same access tokens work on every relay. Inventories you own replicate to
+  all your relays automatically (registration through the ordinary creation
+  handshake, encrypted state + photos pushed); inventories shared WITH you
+  are only pushed to your relays when you ask ("Replicate to all my relays",
+  or the prompt after adding a relay). Kill a relay and the doc keeps
+  syncing through the others; a share link's origin is just a hint for one
+  relay it lives on.
 - **Direct device-to-device sync.** Devices holding the same inventory also
   connect over WebRTC (y-webrtc) and exchange the same encrypted bytes a
-  relay would see — two phones on one Wi-Fi sync even with no relay
-  reachable. Peer discovery ("signaling") runs on your own relays' `/signal`
-  endpoint, never on public servers, and rooms are unguessable HMACs of the
-  document id under its encryption key, plus an encrypted-signaling room
-  password — strangers on a relay cannot discover or join your documents.
+  relay would see. Peer discovery ("signaling") never uses public servers
+  and is redundant three ways: it runs over EVERY enabled relay's `/signal`
+  endpoint at once (peers meet if they share any one relay); on Android,
+  devices on the same Wi-Fi find each other directly via mDNS and introduce
+  each other with zero infrastructure — two phones in a basement sync with
+  no internet at all; and already-connected peers gossip — they exchange
+  relay coordinates and forward WebRTC introductions, so if A can reach B
+  and B can reach C, then B introduces A and C even when those two share no
+  relay. Rooms are unguessable HMACs of the document id under its
+  encryption key, plus an encrypted-signaling room password — strangers on
+  a relay or on your LAN cannot discover or join your documents.
 - **Devices are the source of truth**: full database on every device,
   offline first; any relay can be rebuilt from any device that holds the
   documents.
@@ -225,9 +235,11 @@ cd deploy && echo 'INVENTORY_HOST=inv.example.com' > .env && docker compose up -
 ```
 
 Then, in the app, open **⚙︎ Account & sync → Sync & relays** and add
-`inv.example.com`; each relay shows a health dot once it answers. New
-inventories use it automatically, and "Replicate to all my relays" in an
-inventory's Settings pushes existing ones there.
+`inv.example.com` — the relay syncs to all your linked devices; each device
+shows its own health dot once the relay answers. Inventories you own
+replicate there automatically; for inventories shared with you the app
+offers a one-time prompt (or use "Replicate to all my relays" in the
+inventory's Settings later).
 
 ## Layout
 

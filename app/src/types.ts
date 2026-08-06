@@ -212,6 +212,14 @@ export interface InventoryHandle {
   /** Cached display name for the list screen */
   name?: string;
   readonly: boolean;
+  /**
+   * The inventory belongs to this account (created here or on a linked
+   * device). Owned inventories auto-replicate to every enabled account relay;
+   * joined/shared ones replicate only on explicit request. Set at creation
+   * and propagated through the profile doc; inventories predating the flag
+   * fall back to the capability test in store/replication.ts.
+   */
+  owned?: boolean;
   /** Epoch ms of the last completed sync with a relay on this device. */
   lastSyncedAt?: number;
   /**

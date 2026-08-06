@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom';
 import * as services from './services';
-import { startProfileSync } from './store';
+import { startLanDiscovery, startProfileSync, startReplicationPolicy } from './store';
 import './index.css';
 import './ui/app2.css';
 import { ToastProvider } from './ui/components/Toast';
@@ -28,6 +28,10 @@ export default function App() {
     // the current local registry into it) and keeps the inventory list in
     // sync across this user's devices.
     startProfileSync();
+    // Owned inventories follow the account relay list automatically.
+    startReplicationPolicy();
+    // Android: find nearby devices via mDNS and introduce them relay-free.
+    startLanDiscovery();
   }, []);
 
   return (
